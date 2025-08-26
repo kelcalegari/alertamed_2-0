@@ -1,5 +1,6 @@
 import 'package:smartmed/presentation/pages/configuracao/widgets/adicionar_usuario_widget.dart';
 import 'package:smartmed/presentation/pages/configuracao/widgets/horario_padrao_widget.dart';
+import 'package:smartmed/presentation/pages/configuracao/widgets/info_medica_widget.dart';
 import 'package:smartmed/presentation/pages/configuracao/widgets/modo_silencioso_widget.dart';
 import 'package:smartmed/presentation/pages/configuracao/widgets/usuario_compartilhado_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -40,8 +41,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
 
   List<Widget> get _pages => [
     _buildCard(showHint: _showHint, child: _buildEditarPerfil()),
-    _buildCard(child: const HorarioPadraoWidget()),
-    _buildCard(child: const ModoSilenciosoWidget()),
+    _buildCard(child: const HorariosPadraoEditor()),
+    _buildCard(child: const InfoMedicaWidget()),
     _buildCard(child: const AdicionarUsuarioWidget()),
     _buildCard(child: const ListaUsuariosCompartilhados()),
   ];
@@ -62,7 +63,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
 
-    Future.delayed(const Duration(seconds: 10), () {
+    Future.delayed(const Duration(seconds: 3), () {
       if (mounted) {
         setState(() {
           _showHint = false;

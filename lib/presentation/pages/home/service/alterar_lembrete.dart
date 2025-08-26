@@ -202,7 +202,7 @@ class LembreteService {
     await notificationService.scheduleNotification(
       id: novoIdNotificacao,
       title: 'Hora do medicamento',
-      body: "${tratamento['nomeMedicamento']} (${tratamento['dosagem']} ${tratamento['unidadeMedida']})",
+      body: "${tratamento['nomeMedicamento']} ${tratamento['concentracaoMedicamento']} (${tratamento['dosagem']} ${tratamento['tipoMedicamento']})",
       scheduledDateTime: novaDataHora, idLembrete: novoIdLembrete, idUsuario: idUsuario,
     );
 
@@ -247,7 +247,7 @@ class LembreteService {
         await notificationService.scheduleNotification(
           id: idNotificacao,
           title: 'Hora do medicamento',
-          body: "${tratamento['nomeMedicamento']} (${tratamento['dosagem']} ${tratamento['unidadeMedida']})",
+          body: "${tratamento['nomeMedicamento']} ${tratamento['concentracaoMedicamento']} (${tratamento['dosagem']} ${tratamento['tipoMedicamento']})",
           scheduledDateTime: novaData, idLembrete: id, idUsuario: idUsuario,
         );
       }

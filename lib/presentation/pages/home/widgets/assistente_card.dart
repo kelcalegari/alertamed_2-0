@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../../../providers/user_data_provider.dart';
 import '../../../themes/app_colors.dart';
-import '../service/chatgpt_service.dart';
 
+import '../service/chatgpt_service.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 class CardAssistenteIA extends StatefulWidget {
   final VoidCallback onClose;
 
@@ -13,28 +16,59 @@ class CardAssistenteIA extends StatefulWidget {
 
 class _CardAssistenteIAState extends State<CardAssistenteIA> {
   final TextEditingController controller = TextEditingController();
-  final List<String> mensagens = [
-    'Olá! Sou seu assistente.\nPosso ajudar com dúvidas sobre medicamentos, sintomas ou interações.'
+
+  final List<Map<String, String>> mensagens = [
+    {
+      'role': 'assistant',
+      'content':
+      'Olá! Sou seu assistente.\nPosso ajudar com dúvidas sobre medicamentos, sintomas ou interações.'
+    }
   ];
+
+  bool carregando = false;
 
   void enviarMensagem() async {
     final texto = controller.text.trim();
-    if (texto.isEmpty) return;
+    if (texto.isEmpty || carregando) return;
 
     setState(() {
-      mensagens.add(texto); // Mensagem do usuário
+      mensagens.add({'role': 'user', 'content': texto});
+      carregando = true;
     });
 
     controller.clear();
 
+    final usuarioProvider = context.read<UsuarioProvider>();
+
     try {
-      final resposta = await ChatGPTService.obterResposta(texto);
+      final resposta = await ChatGPTService.obterRespostaComContexto(
+        pergunta: texto,
+        dadosUsuario: usuarioProvider.dadosUsuario,
+        tratamentosMap: usuarioProvider.tratamentosMap,
+        lembretes: usuarioProvider.lembretes,
+        sintomas: usuarioProvider.sintomas,
+        infoMedica: usuarioProvider.infoMedica,
+        ultimasInteracoes: mensagens
+            .where((m) => m['role'] == 'user' || m['role'] == 'assistant')
+            .toList()
+            .reversed
+            .take(5)
+            .toList()
+            .reversed
+            .toList(),
+      );
+
       setState(() {
-        mensagens.add(resposta);
+        mensagens.add({'role': 'assistant', 'content': resposta});
+        carregando = false;
       });
     } catch (e) {
       setState(() {
-        mensagens.add('Erro ao obter resposta da IA.');
+        mensagens.add({
+          'role': 'assistant',
+          'content': 'Ocorreu um erro ao consultar a IA. Tente novamente mais tarde.'
+        });
+        carregando = false;
       });
     }
   }
@@ -82,28 +116,39 @@ class _CardAssistenteIAState extends State<CardAssistenteIA> {
                 reverse: true,
                 itemCount: mensagens.length,
                 itemBuilder: (context, index) {
-                  final msg = mensagens[mensagens.length - 1 - index];
-                  final isAssistente = index % 2 == 0;
+                  final reversedIndex = mensagens.length - 1 - index;
+                  final msg = mensagens[reversedIndex];
+                  final isAssistente = msg['role'] == 'assistant';
 
                   return Align(
-                    alignment: isAssistente ? Alignment.centerLeft : Alignment.centerRight,
+                    alignment: isAssistente
+                        ? Alignment.centerLeft
+                        : Alignment.centerRight,
                     child: Container(
                       margin: const EdgeInsets.symmetric(vertical: 4),
                       padding: const EdgeInsets.all(12),
                       constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.75,
+                        maxWidth: mediaQuery.size.width * 0.75,
                       ),
                       decoration: BoxDecoration(
-                        color: isAssistente ? Colors.grey.shade300 : AppColors.botoesVerdes,
+                        color: isAssistente
+                            ? Colors.grey.shade300
+                            : AppColors.botoesVerdes,
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(
-                        msg,
-                        style: TextStyle(
+                      child: MarkdownBody(
+                    data: msg['content'] ?? '',
+                      styleSheet: MarkdownStyleSheet(
+                        p: TextStyle(
                           fontSize: 15,
                           color: isAssistente ? Colors.black87 : Colors.white,
                         ),
+                        strong: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: isAssistente ? Colors.black87 : Colors.white,
+                        ),
                       ),
+                    ),
                     ),
                   );
                 },
@@ -125,14 +170,17 @@ class _CardAssistenteIAState extends State<CardAssistenteIA> {
                     child: TextField(
                       controller: controller,
                       decoration: const InputDecoration(
-                        hintText: 'Digite aquiii',
+                        hintText: 'Digite aqui...',
                         border: InputBorder.none,
                       ),
                       onSubmitted: (_) => enviarMensagem(),
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.send, color: AppColors.textVerde),
+                    icon: Icon(
+                      carregando ? Icons.hourglass_top : Icons.send,
+                      color: AppColors.textVerde,
+                    ),
                     onPressed: enviarMensagem,
                   ),
                 ],

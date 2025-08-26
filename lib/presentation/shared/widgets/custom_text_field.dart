@@ -17,6 +17,7 @@ class CustomTextField extends StatefulWidget {
   final FocusNode? focusNode;
   final void Function()? onComplete;
   final void Function(PointerDownEvent)? onTapOutside;
+  final TimeOfDay? initialTime;
 
   const CustomTextField({
     super.key,
@@ -34,7 +35,7 @@ class CustomTextField extends StatefulWidget {
     this.validador,
     this.focusNode,
     this.onComplete,
-    this.onTapOutside,
+    this.onTapOutside, this.initialTime,
   });
 
   @override
@@ -91,7 +92,7 @@ class _CustomTextFieldState extends State<CustomTextField> {
           } else if (widget.isTime) {
             TimeOfDay? picked = await showTimePicker(
               context: context,
-              initialTime: TimeOfDay.now(),
+              initialTime: widget.initialTime?? TimeOfDay.now(),
             );
             if (picked != null) {
               widget.ctrl.text = picked.format(context);
@@ -100,6 +101,11 @@ class _CustomTextFieldState extends State<CustomTextField> {
         }
             : null,
         decoration: InputDecoration(
+          isDense: true, // deixa mais compacto
+          contentPadding: const EdgeInsets.symmetric(
+            vertical: 15, // altura interna
+            horizontal: 8, // distância lateral
+          ),
           labelText: widget.label,
           hintText: widget.hint,
           prefixIcon: widget.icon != null ? Icon(widget.icon) : null,
@@ -127,6 +133,7 @@ class _CustomTextFieldState extends State<CustomTextField> {
             borderRadius: BorderRadius.circular(15.0),
           ),
         ),
+
         onEditingComplete: widget.onComplete,
         onTapOutside: widget.onTapOutside,
       ),

@@ -111,7 +111,7 @@ class SalvarTratamento {
         notificationService.scheduleNotification(
           id: idNotificacao,
           title: 'Hora do medicamento',
-          body: '$nomeMedicamento (${qtdMedicamento} $unidadeMedida)',
+          body: '$nomeMedicamento ${concentracaoMedicamento} (${qtdMedicamento} $tipoTratamento)',
           scheduledDateTime: dataLembrete, idLembrete: idLembrete, idUsuario: idUsuario,
         ),
       );
