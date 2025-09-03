@@ -134,23 +134,34 @@ class UsuarioProvider extends ChangeNotifier {
       debugPrint('Erro ao salvar horariosSilenciosos: $e');
     }
   }
+// Converte a lista dinâmica para List<Map<String, String>>
+  List<Map<String, String>> _toStringList(List<Map<String, dynamic>> src) {
+    return src.map((m) => m.map((k, v) => MapEntry(k, v?.toString() ?? ''))).toList();
+  }
 
-  /// Helper: retorna o registro de horários de refeição para um dia
-  /// (aceita 'Dom', 'Seg', ..., 'Sáb' ou 'Padrão' se não encontrar).
-  Map<String, dynamic> horarioRefeicaoParaDia(String dia) {
-    final item = horariosRefeicoes.firstWhere(
-          (h) => (h['dia'] as String).toLowerCase() == dia.toLowerCase(),
-      orElse: () => const {},
+  /// Retorna o registro de horários de refeição para um dia
+  /// (aceita 'Dom', 'Seg', ..., 'Sáb' ou 'Padrão'/'Padrao' se não encontrar).
+  Map<String, String> horarioRefeicaoParaDia(String dia) {
+    // supondo que horariosRefeicoes seja List<Map<String, dynamic>>
+    final List<Map<String, String>> horariosRefeicoesStr = _toStringList(horariosRefeicoes);
+
+    final item = horariosRefeicoesStr.firstWhere(
+          (h) => (h['dia'] ?? '').toLowerCase() == dia.toLowerCase(),
+      orElse: () => <String, String>{},
     );
+
     if (item.isNotEmpty) return item;
 
-    // fallback para 'Padrão'
-    return horariosRefeicoes.firstWhere(
-          (h) => (h['dia'] as String).toLowerCase() == 'padrão' || (h['dia'] as String).toLowerCase() == 'padrao',
-      orElse: () => _defaultHorariosRefeicoes().first,
+    // fallback para 'Padrão' / 'Padrao'
+    return horariosRefeicoesStr.firstWhere(
+          (h) {
+        final d = (h['dia'] ?? '').toLowerCase();
+        return d == 'padrão' || d == 'padrao';
+      },
+      orElse: () => _toStringList(_defaultHorariosRefeicoes()).first,
     );
-    // Obs: aceita 'Padrão' e 'Padrao' para evitar problemas de acentuação.
   }
+
 
   // ---------- Já existentes ----------
 

@@ -5,6 +5,7 @@ import '../../../../providers/user_data_provider.dart';
 import '../../../shared/widgets/custom_seletor_field.dart';
 import '../../../shared/widgets/custom_text_field.dart';
 import '../../../themes/app_colors.dart';
+import '../../home/service/alterar_lembrete.dart';
 import '../model/horarios_model.dart'; // DiaSemana, HorarioRefeicaoModel, helpers
 
 class HorariosPadraoEditor extends StatefulWidget {
@@ -121,7 +122,7 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
   }
 
   bool _diaEmUso(DiaSemana d) => _horarios.any((h) => h.dia == d);
-
+  /*
   Future<void> _selecionarHorario(
     DiaSemana dia, {
     required String tipo,
@@ -149,7 +150,7 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
         break;
     }
     setState(() {});
-  }
+  }*/
 
   List<DropdownMenuItem<DiaSemana>> _diasDisponiveisPara(DiaSemana atual) {
     final usados = _horarios.map((h) => h.dia).toSet();
@@ -275,14 +276,8 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
               pad: 0,
               initialTime: h.cafe,
               fontSize: 15,
-              onComplete: () async {
-                final picked = await showTimePicker(
-                  context: context,
-                  initialTime: h.cafe,
-                );
-                if (picked != null) {
-                  _trocarHora(h.dia, "cafe", picked);
-                }
+              onTimePicked: (picked) {
+                _trocarHora(h.dia, "cafe", picked);
               },
             ),
           ),
@@ -295,14 +290,8 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
               pad: 0,
               initialTime: h.almoco,
               fontSize: 15,
-              onComplete: () async {
-                final picked = await showTimePicker(
-                  context: context,
-                  initialTime: h.almoco,
-                );
-                if (picked != null) {
-                  _trocarHora(h.dia, "almoco", picked);
-                }
+              onTimePicked: (picked) {
+                _trocarHora(h.dia, "almoco", picked);
               },
             ),
           ),
@@ -316,14 +305,8 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
               pad: 0,
               initialTime: h.janta,
               fontSize: 15,
-              onComplete: () async {
-                final picked = await showTimePicker(
-                  context: context,
-                  initialTime: h.janta,
-                );
-                if (picked != null) {
-                  _trocarHora(h.dia, "janta", picked);
-                }
+              onTimePicked: (picked) {
+                _trocarHora(h.dia, "janta", picked);
               },
             ),
           ),
@@ -335,7 +318,10 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
               tooltip: 'Remover dia',
               icon: const Icon(Icons.delete_outline, size: 18), // menor ícone
               padding: EdgeInsets.zero, // remove padding extra
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32), // botão compacto
+              constraints: const BoxConstraints(
+                minWidth: 32,
+                minHeight: 32,
+              ), // botão compacto
               onPressed: () => _removerDia(h.dia),
             )
           else
@@ -462,11 +448,19 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
                   final lista = _toProviderList(_horarios);
                   await provider.salvarHorariosRefeicoes(lista);
                   widget.onSaved?.call();
+
+                  // 👇 chama o service aqui
+                  await LembreteService().reagendarLembretesPorRefeicaoViaLembretes(
+                    context: context,
+                    idUsuario: provider.userId,
+                  );
+
                   if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Horários salvos!')),
                   );
                 },
+
                 icon: const Icon(Icons.save_outlined),
                 label: const Text('Salvar'),
               ),

@@ -13,8 +13,8 @@ class HorariosRefeicaoService {
   Future<List<HorarioRefeicaoModel>> load(String userId) async {
     final snap = await _userDoc(userId).get();
     final data = snap.data() ?? {};
-    final list = (data['horariosRefeicoes'] as List<dynamic>?)
-        ?.cast<Map<String, dynamic>>() ??
+    final list = (data['horariosRefeicoes'] as List<String>?)
+        ?.cast<Map<String, String>>() ??
         [];
     if (list.isEmpty) return defaultHorarios();
     return list.map(HorarioRefeicaoModel.fromMap).toList();

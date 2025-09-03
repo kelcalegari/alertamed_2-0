@@ -17,6 +17,8 @@ class CustomTextField extends StatefulWidget {
   final FocusNode? focusNode;
   final void Function()? onComplete;
   final void Function(PointerDownEvent)? onTapOutside;
+  final void Function(TimeOfDay time)? onTimePicked;
+  final void Function(DateTime date)? onDatePicked;
   final TimeOfDay? initialTime;
 
   const CustomTextField({
@@ -35,7 +37,8 @@ class CustomTextField extends StatefulWidget {
     this.validador,
     this.focusNode,
     this.onComplete,
-    this.onTapOutside, this.initialTime,
+    this.onTapOutside, this.initialTime,    this.onTimePicked,
+    this.onDatePicked,
   });
 
   @override
@@ -63,6 +66,7 @@ class _CustomTextFieldState extends State<CustomTextField> {
         onTap: (widget.textInputType == TextInputType.datetime || widget.isTime)
             ? () async {
           if (widget.textInputType == TextInputType.datetime) {
+            // --- DATE PICKER ---
             DateTime initialDate;
             try {
               final parts = widget.ctrl.text.split('/');
@@ -78,28 +82,66 @@ class _CustomTextFieldState extends State<CustomTextField> {
               initialDate = DateTime.now();
             }
 
-            DateTime? picked = await showDatePicker(
+            final picked = await showDatePicker(
               context: context,
               initialDate: initialDate,
               firstDate: DateTime(1900),
               lastDate: DateTime(2100),
             );
             if (picked != null) {
-              widget.ctrl.text = "${picked.day.toString().padLeft(2, '0')}/"
+              widget.ctrl.text =
+              "${picked.day.toString().padLeft(2, '0')}/"
                   "${picked.month.toString().padLeft(2, '0')}/"
                   "${picked.year}";
+              // dispara validação/ações
+              widget.onDatePicked?.call(picked);
+              widget.onComplete?.call();
+              FocusScope.of(context).unfocus();
             }
           } else if (widget.isTime) {
-            TimeOfDay? picked = await showTimePicker(
+            // --- TIME PICKER (24h + HH:mm) ---
+            TimeOfDay initial =
+                widget.initialTime ??
+                    (() {
+                      // tenta parsear HH:mm já presente
+                      final t = widget.ctrl.text.trim();
+                      final p = t.split(':');
+                      if (p.length == 2) {
+                        final h = int.tryParse(p[0]);
+                        final m = int.tryParse(p[1]);
+                        if (h != null && m != null) return TimeOfDay(hour: h, minute: m);
+                      }
+                      return TimeOfDay.now();
+                    })();
+
+            final picked = await showTimePicker(
               context: context,
-              initialTime: widget.initialTime?? TimeOfDay.now(),
+              initialTime: initial,
+              builder: (ctx, child) {
+                // força relógio 24h
+                return MediaQuery(
+                  data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
+                  child: child!,
+                );
+              },
             );
+
             if (picked != null) {
-              widget.ctrl.text = picked.format(context);
+              // formata HH:mm (24h)
+              final hh = picked.hour.toString().padLeft(2, '0');
+              final mm = picked.minute.toString().padLeft(2, '0');
+              widget.ctrl.text = "$hh:$mm";
+
+              widget.onTimePicked?.call(picked);
+              widget.onComplete?.call();
+
+              // opcional: tirar foco para já mostrar erro/ok visual
+              FocusScope.of(context).unfocus();
             }
           }
         }
             : null,
+
         decoration: InputDecoration(
           isDense: true, // deixa mais compacto
           contentPadding: const EdgeInsets.symmetric(
