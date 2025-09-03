@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-
 import '../../../../providers/user_data_provider.dart';
 import '../../../themes/app_colors.dart';
 import 'package:intl/intl.dart';
@@ -120,6 +119,13 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
   late AnimationController _animationController;
   late Animation<Offset> _offsetAnimation;
 
+  /// Quando o usuário digita manualmente horários fixos (HH:mm)
+  List<String> _horariosFixos = [];
+
+  /// NOVO: Refeições selecionadas no modo "Junto com Refeições"
+  /// valores: 'cafe' | 'almoco' | 'jantar'
+  List<String> _refeicoesSelecionadas = [];
+
   @override
   void initState() {
     super.initState();
@@ -206,7 +212,6 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
             child: IndexedStack(
-              //key: ValueKey(_currentIndex),
               index: _currentIndex,
               children: [
                 _buildCard(
@@ -229,34 +234,32 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
         AnimatedSize(
           duration: const Duration(milliseconds: 100),
           curve: Curves.easeInOut,
-          child:
-              showHint
-                  ? Padding(
-                    padding: const EdgeInsets.only(top: 12, bottom: 12),
-                    child: SlideTransition(
-                      position: _offsetAnimation,
-                      child: Column(
-                        children: const [
-                          Icon(
-                            Icons.keyboard_arrow_up,
-                            size: 28,
-                            color: AppColors.textVerde,
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            "Deslize para cima",
-                            style: TextStyle(
-                              color: AppColors.textVerde,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
+          child: showHint
+              ? Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 12),
+            child: SlideTransition(
+              position: _offsetAnimation,
+              child: Column(
+                children: const [
+                  Icon(
+                    Icons.keyboard_arrow_up,
+                    size: 28,
+                    color: AppColors.textVerde,
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    "Deslize para cima",
+                    style: TextStyle(
+                      color: AppColors.textVerde,
+                      fontSize: 12,
                     ),
-                  )
-                  : const SizedBox.shrink(),
+                  ),
+                ],
+              ),
+            ),
+          )
+              : const SizedBox.shrink(),
         ),
-
         Expanded(
           child: Container(
             width: double.infinity,
@@ -310,6 +313,19 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
           _selectedUnidadesMedidaLembrete = value;
         });
       },
+      selectedTipoFrequencia: _selectedTipoFrequencia ?? '',
+      onHorariosFixosChanged: (horas) {
+        setState(() {
+          _horariosFixos = horas;
+        });
+      },
+
+      // NOVO: captura as refeições selecionadas
+      onRefeicoesChanged: (refs) {
+        setState(() {
+          _refeicoesSelecionadas = refs;
+        });
+      },
     );
   }
 
@@ -333,36 +349,302 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
     );
   }
 
-  void _calcularAgendamento() {
-    final formatter = DateFormat('dd/MM/yyyy HH:mm');
+  // ===== Helpers compartilhados por "Horários Fixos" e "Refeições" =====
 
+  DateTime? _parseDateddMMyyyy(String d) {
+    final p = d.split('/');
+    if (p.length != 3) return null;
+    final dia = int.tryParse(p[0]);
+    final mes = int.tryParse(p[1]);
+    final ano = int.tryParse(p[2]);
+    if (dia == null || mes == null || ano == null) return null;
+    return DateTime(ano, mes, dia);
+  }
+
+  Duration? _parseHoraHHmm(String h) {
+    final p = h.split(':');
+    if (p.length != 2) return null;
+    final hh = int.tryParse(p[0]);
+    final mm = int.tryParse(p[1]);
+    if (hh == null || mm == null) return null;
+    return Duration(hours: hh, minutes: mm);
+  }
+
+  List<DateTime> _gerarLembretesFixos({
+    required DateTime dataInicial,
+    required List<String> horariosHHmm,
+    int? totalDoses,
+    DateTime? dataFinalInclusiva,
+  }) {
+    assert((totalDoses != null) ^ (dataFinalInclusiva != null),
+    "Informe totalDoses XOR dataFinalInclusiva");
+
+    final horas = horariosHHmm
+        .map(_parseHoraHHmm)
+        .whereType<Duration>()
+        .toList()
+      ..sort((a, b) => a.inMinutes.compareTo(b.inMinutes));
+
+    if (horas.isEmpty) return const [];
+
+    final result = <DateTime>[];
+    var dia = DateTime(dataInicial.year, dataInicial.month, dataInicial.day);
+
+    bool dentroDoPeriodo(DateTime dt) {
+      if (dataFinalInclusiva == null) return true;
+      final endOfDay = DateTime(
+        dataFinalInclusiva.year,
+        dataFinalInclusiva.month,
+        dataFinalInclusiva.day,
+        23, 59, 59, 999,
+      );
+      return !dt.isAfter(endOfDay);
+    }
+
+    while (true) {
+      for (final h in horas) {
+        final dt = DateTime(dia.year, dia.month, dia.day).add(h);
+        if (dt.isBefore(dataInicial)) continue;        // ignora 1º dia antes da âncora
+        if (!dentroDoPeriodo(dt)) return result;       // estourou período
+        result.add(dt);
+        if (totalDoses != null && result.length >= totalDoses) return result;
+      }
+      dia = dia.add(const Duration(days: 1));
+      if (result.length > 20000) return result; // guarda-chuva
+    }
+  }
+
+  DateTime _ultimaDoseHorariosFixosAncorada({
+    required DateTime dataHoraInicial,
+    required List<String> horariosHHmm,
+    required int totalDoses,
+  }) {
+    final horas = horariosHHmm
+        .map(_parseHoraHHmm)
+        .whereType<Duration>()
+        .toList()
+      ..sort((a, b) => a.inMinutes.compareTo(b.inMinutes));
+
+    if (horas.isEmpty) {
+      throw ArgumentError('Lista de horários vazia');
+    }
+    if (totalDoses <= 0) {
+      throw ArgumentError('totalDoses deve ser > 0');
+    }
+
+    final dosesPorDia = horas.length;
+    final baseDia = DateTime(
+      dataHoraInicial.year,
+      dataHoraInicial.month,
+      dataHoraInicial.day,
+    );
+    final minutosAncora = dataHoraInicial.difference(baseDia).inMinutes;
+
+    int firstIdx = horas.indexWhere((h) => h.inMinutes >= minutosAncora);
+    final slotsHoje = firstIdx == -1 ? 0 : (dosesPorDia - firstIdx);
+
+    int rem = totalDoses;
+
+    if (slotsHoje > 0) {
+      if (rem <= slotsHoje) {
+        final idxInDay = firstIdx + (rem - 1);
+        return baseDia.add(horas[idxInDay]);
+      }
+      rem -= slotsHoje;
+      final fullDays = (rem - 1) ~/ dosesPorDia;
+      final idxInDay2 = (rem - 1) % dosesPorDia;
+      final targetDay = baseDia.add(Duration(days: 1 + fullDays));
+      return targetDay.add(horas[idxInDay2]);
+    } else {
+      final fullDays = (rem - 1) ~/ dosesPorDia;
+      final idxInDay2 = (rem - 1) % dosesPorDia;
+      final targetDay = baseDia.add(Duration(days: 1 + fullDays));
+      return targetDay.add(horas[idxInDay2]);
+    }
+  }
+
+
+  void _calcularAgendamento() {
+    final formatterDate = DateFormat('dd/MM/yyyy');
+    final usuarioProvider = Provider.of<UsuarioProvider>(context, listen: false);
+
+    // Campos do formulário
     final dataInicialStr = _dataInicialCtrl.text.trim();
     final horaInicialStr = _horaInicialCtrl.text.trim();
-    final freqStr = _frequenciaCtrl.text.trim();
-    final qtdStr = _qtdMedicamentoCtrl.text.trim();
-    final qtdTotalStr = _qtdMedicamentoTotalCtrl.text.trim();
-    final dataFinalStr = _dataFinalCtrl.text.trim();
+    final freqStr       = _frequenciaCtrl.text.trim();
+    final qtdStr        = _qtdMedicamentoCtrl.text.trim();
+    final qtdTotalStr   = _qtdMedicamentoTotalCtrl.text.trim();
+    final dataFinalStr  = _dataFinalCtrl.text.trim();
 
-    try {
-      if (dataInicialStr.isEmpty ||
-          horaInicialStr.isEmpty ||
-          freqStr.isEmpty ||
-          qtdStr.isEmpty)
+    if (dataInicialStr.isEmpty || qtdStr.isEmpty) return;
+    final qtdPorDose = int.tryParse(qtdStr);
+    if (qtdPorDose == null || qtdPorDose <= 0) return;
+
+    final tipoFreq = (_selectedTipoFrequencia ?? '');
+
+    // ===================== MODO HORÁRIOS FIXOS =====================
+    if (tipoFreq == 'Horários Fixos') {
+      final dataInicialDate = _parseDateddMMyyyy(dataInicialStr);
+      if (dataInicialDate == null) return;
+
+      final horariosValidos = _horariosFixos.where((t) => t.trim().isNotEmpty).toList();
+      if (horariosValidos.isEmpty) return;
+
+      // ÂNCORA
+      DateTime dataHoraInicial = DateTime(
+        dataInicialDate.year, dataInicialDate.month, dataInicialDate.day,
+      );
+      final horaInicialDur = _parseHoraHHmm(horaInicialStr);
+      if (horaInicialDur != null) {
+        dataHoraInicial = dataHoraInicial.add(horaInicialDur);
+      } else {
+        final now = DateTime.now();
+        final isMesmoDia = now.year == dataInicialDate.year &&
+            now.month == dataInicialDate.month &&
+            now.day == dataInicialDate.day;
+        if (isMesmoDia) dataHoraInicial = now;
+      }
+
+      final totalQtd = qtdTotalStr.isNotEmpty ? int.tryParse(qtdTotalStr) : null;
+      final dataFinalDate = dataFinalStr.isNotEmpty ? _parseDateddMMyyyy(dataFinalStr) : null;
+
+      if (totalQtd != null && dataFinalDate == null) {
+        final totalDoses = (totalQtd / qtdPorDose).floor();
+        if (totalDoses <= 0) return;
+
+        final last = _ultimaDoseHorariosFixosAncorada(
+          dataHoraInicial: dataHoraInicial,
+          horariosHHmm: horariosValidos,
+          totalDoses: totalDoses,
+        );
+        _dataFinalCtrl.text = formatterDate.format(last);
         return;
+      }
 
+      if (totalQtd == null && dataFinalDate != null) {
+        final lembretes = _gerarLembretesFixos(
+          dataInicial: dataHoraInicial,
+          horariosHHmm: horariosValidos,
+          dataFinalInclusiva: dataFinalDate,
+        );
+        final totalDoses = lembretes.length;
+        final novaQtdTotal = totalDoses * qtdPorDose;
+        _qtdMedicamentoTotalCtrl.text = novaQtdTotal.toString();
+        return;
+      }
+
+      if (totalQtd != null && dataFinalDate != null) {
+        final lembretes = _gerarLembretesFixos(
+          dataInicial: dataHoraInicial,
+          horariosHHmm: horariosValidos,
+          dataFinalInclusiva: dataFinalDate,
+        );
+        final dosesEsperadas = lembretes.length;
+        final qtdEsperada = dosesEsperadas * qtdPorDose;
+
+        if (qtdEsperada != totalQtd) {
+          final totalDoses = (totalQtd / qtdPorDose).floor();
+          if (totalDoses <= 0) return;
+
+          final last = _ultimaDoseHorariosFixosAncorada(
+            dataHoraInicial: dataHoraInicial,
+            horariosHHmm: horariosValidos,
+            totalDoses: totalDoses,
+          );
+          _dataFinalCtrl.text = formatterDate.format(last);
+        }
+        return;
+      }
+      return;
+    }
+
+    // ===================== MODO JUNTO COM REFEIÇÕES (NOVO) =====================
+    if (tipoFreq == 'Junto com Refeições') {
+      final dataInicialDate = _parseDateddMMyyyy(dataInicialStr);
+      if (dataInicialDate == null) return;
+
+      if (_refeicoesSelecionadas.isEmpty) return; // UI já valida, aqui só garante
+
+      // Quantas doses por dia? (uma por refeição selecionada)
+      final dosesPorDia = _refeicoesSelecionadas.length;
+      if (dosesPorDia <= 0) return;
+
+      final totalQtd   = qtdTotalStr.isNotEmpty ? int.tryParse(qtdTotalStr) : null;
+      final dataFinalDate =
+      dataFinalStr.isNotEmpty ? _parseDateddMMyyyy(dataFinalStr) : null;
+
+      // Só total -> calcula data final (contagem por dias)
+      if (totalQtd != null && dataFinalDate == null) {
+        final totalDoses = (totalQtd / qtdPorDose).floor(); // p.ex. 10/1 = 10 doses
+        if (totalDoses <= 0) return;
+
+        // dias necessários = ceil(totalDoses / dosesPorDia)
+        final diasNecessarios =
+        (totalDoses / dosesPorDia).ceil(); // inclui o dia inicial
+        final lastDay = dataInicialDate.add(Duration(days: diasNecessarios - 1));
+
+        _dataFinalCtrl.text = DateFormat('dd/MM/yyyy').format(lastDay);
+        return;
+      }
+
+      // Só data final -> calcula qtd total (contagem por dias)
+      if (totalQtd == null && dataFinalDate != null) {
+        // diferença inclusiva em dias
+        final diffDias = dataFinalDate
+            .difference(DateTime(
+            dataInicialDate.year, dataInicialDate.month, dataInicialDate.day))
+            .inDays + 1;
+        if (diffDias <= 0) return;
+
+        final totalDoses = diffDias * dosesPorDia; // ex.: 5 dias * 2 ref = 10 doses
+        final novaQtdTotal = totalDoses * qtdPorDose;
+        _qtdMedicamentoTotalCtrl.text = novaQtdTotal.toString();
+        return;
+      }
+
+      // Ambos informados -> valida; se divergir, recalcula data final pela contagem por dias
+      if (totalQtd != null && dataFinalDate != null) {
+        final diffDias = dataFinalDate
+            .difference(DateTime(
+            dataInicialDate.year, dataInicialDate.month, dataInicialDate.day))
+            .inDays + 1;
+        if (diffDias <= 0) return;
+
+        final dosesEsperadas = diffDias * dosesPorDia;
+        final qtdEsperada = dosesEsperadas * qtdPorDose;
+
+        if (qtdEsperada != totalQtd) {
+          final totalDoses = (totalQtd / qtdPorDose).floor();
+          if (totalDoses <= 0) return;
+
+          final diasNecessarios = (totalDoses / dosesPorDia).ceil();
+          final lastDay =
+          dataInicialDate.add(Duration(days: diasNecessarios - 1));
+          _dataFinalCtrl.text = DateFormat('dd/MM/yyyy').format(lastDay);
+        }
+        return;
+      }
+
+      // nenhum dos dois informado -> nada a calcular aqui
+      return;
+    }
+
+
+    // ===================== MODO INTERVALOS FIXOS (já existente) =====================
+    try {
+      if (horaInicialStr.isEmpty || freqStr.isEmpty) return;
+
+      final formatter = DateFormat('dd/MM/yyyy HH:mm');
       final dataInicial = formatter.parse('$dataInicialStr $horaInicialStr');
-      final horaStr = freqStr.split(':').first;
+
+      final horaStr = freqStr.split(':').first; // "8" de "8" ou "8:00"
       final frequenciaHoras = int.parse(horaStr);
-      final qtdPorDose = int.parse(qtdStr);
 
-      final totalQtd =
-          qtdTotalStr.isNotEmpty ? int.tryParse(qtdTotalStr) : null;
+      final totalQtd = qtdTotalStr.isNotEmpty ? int.tryParse(qtdTotalStr) : null;
       final dataFinal =
-          dataFinalStr.isNotEmpty
-              ? DateFormat('dd/MM/yyyy').parse(dataFinalStr)
-              : null;
+      dataFinalStr.isNotEmpty ? formatterDate.parse(dataFinalStr) : null;
 
-      // 1. Só qtdTotal preenchido → calcular dataFinal
+      // 1) Só qtdTotal → calcula dataFinal
       if (totalQtd != null && dataFinal == null) {
         final totalDoses = (totalQtd / qtdPorDose).floor();
         final novaDataFinal = _calcularDataFinal(
@@ -370,11 +652,11 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
           frequenciaHoras,
           totalDoses,
         );
-        _dataFinalCtrl.text = DateFormat('dd/MM/yyyy').format(novaDataFinal);
+        _dataFinalCtrl.text = formatterDate.format(novaDataFinal);
         return;
       }
 
-      // 2. Só dataFinal preenchida → calcular qtdTotal
+      // 2) Só dataFinal → calcula qtdTotal
       if (totalQtd == null && dataFinal != null) {
         final totalDoses = _calcularTotalDoses(
           dataInicial,
@@ -386,7 +668,7 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
         return;
       }
 
-      // 3. Ambos preenchidos → validar se batem
+      // 3) Ambos → valida; se divergir, recalcula dataFinal
       if (totalQtd != null && dataFinal != null) {
         final totalDosesEsperadas = _calcularTotalDoses(
           dataInicial,
@@ -395,7 +677,6 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
         );
         final qtdEsperada = totalDosesEsperadas * qtdPorDose;
 
-        // Se valor esperado for diferente, confiar na frequência e qtd e recalcular a data final
         if (qtdEsperada != totalQtd) {
           final totalDoses = (totalQtd / qtdPorDose).floor();
           final novaDataFinal = _calcularDataFinal(
@@ -403,11 +684,11 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
             frequenciaHoras,
             totalDoses,
           );
-          _dataFinalCtrl.text = DateFormat('dd/MM/yyyy').format(novaDataFinal);
+          _dataFinalCtrl.text = formatterDate.format(novaDataFinal);
         }
       }
     } catch (_) {
-      // erro no parse → ignora
+      // parse error -> ignora
     }
   }
 
@@ -423,6 +704,7 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       return;
     }
 
+
     final controller = SalvarTratamento(
       usuarioProvider: usuarioProvider,
       nomeMedicamento: _nameMedicamentoCtrl.text,
@@ -432,6 +714,7 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       qtdMedicamentoTotal: _qtdMedicamentoTotalCtrl.text.trim(),
       tipoTratamento: _selectedTipoTratamento,
       frequenciaHoras: _frequenciaCtrl.text.trim(),
+      horariosFixos: _horariosFixos,
       dataInicial: _dataInicialCtrl.text.trim(),
       horaInicial: _horaInicialCtrl.text.trim(),
       idCuidador: "_idCuidador", // pega do seu estado/variável
@@ -440,6 +723,8 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       qtdEstoqueMinimoCtrl: _qtdEstoqueMinimoCtrl.text.trim(),
       dataValidadeCtrl: _dataValidadeCtrl.text.trim(),
       unidadeMedida: _selectedUnidadesMedidaLembrete ?? "",
+      tipoFrequencia:  _selectedTipoFrequencia ?? "",
+      refeicoesSelecionadas: _refeicoesSelecionadas,
     );
 
     try {
@@ -453,20 +738,19 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
   }
 
   DateTime _calcularDataFinal(
-    DateTime dataInicial,
-    int frequenciaHoras,
-    int totalDoses,
-  ) {
+      DateTime dataInicial,
+      int frequenciaHoras,
+      int totalDoses,
+      ) {
     final duracaoTotalHoras = (totalDoses - 1) * frequenciaHoras;
     return dataInicial.add(Duration(hours: duracaoTotalHoras));
   }
 
-  /// Calcula o total de doses a partir da data inicial, data final e frequência em horas
   int _calcularTotalDoses(
-    DateTime dataInicial,
-    DateTime dataFinal,
-    int frequenciaHoras,
-  ) {
+      DateTime dataInicial,
+      DateTime dataFinal,
+      int frequenciaHoras,
+      ) {
     final duracaoHoras = dataFinal.difference(dataInicial).inHours;
     return (duracaoHoras / frequenciaHoras).floor() + 1;
   }
