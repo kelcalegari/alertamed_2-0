@@ -12,13 +12,14 @@ class ProximosTratamentosCard extends StatelessWidget {
   final VoidCallback onRegistrarSintoma;
   final VoidCallback onRegistrarTratamento;
   final VoidCallback onCardAssistenteIa;
+  final VoidCallback onCardRelatorio;
   final DateTime dia;
   const ProximosTratamentosCard({
     super.key,
     required this.onRegistrarSintoma,
     required this.onRegistrarTratamento,
     required this.onCardAssistenteIa,
-    required this.dia,
+    required this.dia, required this.onCardRelatorio,
   });
 
   @override
@@ -175,6 +176,8 @@ class ProximosTratamentosCard extends StatelessWidget {
             _buildBotao(context, "Registrar Sintoma", onRegistrarSintoma),
             const SizedBox(height: 8),
             _buildBotao(context, "Orientação Inteligente", onCardAssistenteIa),
+            const SizedBox(height: 8),
+            _buildBotao(context, "Gerar Retórios", onCardRelatorio),
             const SizedBox(height: 100),
           ],
         ),

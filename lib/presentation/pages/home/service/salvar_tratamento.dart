@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-
+import 'package:diacritic/diacritic.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../providers/user_data_provider.dart';
 
@@ -25,7 +25,8 @@ class SalvarTratamento {
   final String unidadeMedida;
   final String tipoFrequencia;
   final UsuarioProvider usuarioProvider;
-
+  final bool isContinuo;
+  final int janelaPreGeracaoDias;
   /// Para "Junto com Refeições": ['cafe','almoco','jantar']
   final List<String> refeicoesSelecionadas;
 
@@ -49,6 +50,8 @@ class SalvarTratamento {
     required this.horariosFixos,
     required this.tipoFrequencia,
     required this.refeicoesSelecionadas,
+    required this.isContinuo,
+    this.janelaPreGeracaoDias = 15,
   });
 
   // ------------------- Utils & Helpers -------------------
@@ -58,8 +61,7 @@ class SalvarTratamento {
     return v == null ? fallback : v;
   }
 
-  DateTime _parseDate(String ddMMyyyy) =>
-      DateFormat("dd/MM/yyyy").parse(ddMMyyyy);
+  DateTime _parseDate(String ddMMyyyy) => DateFormat("dd/MM/yyyy").parse(ddMMyyyy);
 
   DateTime _parseTimeOnDate(String HHmm, DateTime date) {
     final t = DateFormat("HH:mm").parse(HHmm);
@@ -75,34 +77,81 @@ class SalvarTratamento {
     return Duration(hours: h, minutes: m);
   }
 
+  DateTime? _parseDateddMMyyyy(String d) {
+    final p = d.split('/');
+    if (p.length != 3) return null;
+    final dia = int.tryParse(p[0]);
+    final mes = int.tryParse(p[1]);
+    final ano = int.tryParse(p[2]);
+    if (dia == null || mes == null || ano == null) return null;
+    return DateTime(ano, mes, dia);
+  }
+
+  DateTime _endOfDay(DateTime d) => DateTime(d.year, d.month, d.day, 23, 59, 59, 999);
+
+  DateTime _safeStartInterval(DateTime baseDate) {
+    try {
+      return _parseTimeOnDate(horaInicial, baseDate);
+    } catch (_) {
+      return DateTime(baseDate.year, baseDate.month, baseDate.day, 8, 0); // fallback 08:00
+    }
+  }
+
   /// Normaliza rótulos de dias para chaves canônicas
   /// ex.: "Seg", "segunda", "SEGUNDA" -> "segunda"; "Padrão" -> "padrao"
   String _normDia(String dia) {
     final d = dia.trim().toLowerCase();
     switch (d) {
-      case 'seg': case 'segunda': return 'segunda';
-      case 'ter': case 'terça': case 'terca': return 'terça';
-      case 'qua': case 'quarta': return 'quarta';
-      case 'qui': case 'quinta': return 'quinta';
-      case 'sex': case 'sexta': return 'sexta';
-      case 'sab': case 'sábado': case 'sabado': return 'sábado';
-      case 'dom': case 'domingo': return 'domingo';
-      case 'padrao': case 'padrão': return 'padrao';
-      default: return d; // deixa como veio
+      case 'seg':
+      case 'segunda':
+        return 'segunda';
+      case 'ter':
+      case 'terça':
+      case 'terca':
+        return 'terça';
+      case 'qua':
+      case 'quarta':
+        return 'quarta';
+      case 'qui':
+      case 'quinta':
+        return 'quinta';
+      case 'sex':
+      case 'sexta':
+        return 'sexta';
+      case 'sab':
+      case 'sábado':
+      case 'sabado':
+        return 'sábado';
+      case 'dom':
+      case 'domingo':
+        return 'domingo';
+      case 'padrao':
+      case 'padrão':
+        return 'padrao';
+      default:
+        return d; // deixa como veio
     }
   }
 
   /// Retorna a chave canônica do dia da semana para uma data.
   String _diaSemanaPTBR(DateTime dt) {
     switch (dt.weekday) {
-      case DateTime.monday: return 'segunda';
-      case DateTime.tuesday: return 'terça';
-      case DateTime.wednesday: return 'quarta';
-      case DateTime.thursday: return 'quinta';
-      case DateTime.friday: return 'sexta';
-      case DateTime.saturday: return 'sábado';
-      case DateTime.sunday: return 'domingo';
-      default: return 'padrao';
+      case DateTime.monday:
+        return 'segunda';
+      case DateTime.tuesday:
+        return 'terça';
+      case DateTime.wednesday:
+        return 'quarta';
+      case DateTime.thursday:
+        return 'quinta';
+      case DateTime.friday:
+        return 'sexta';
+      case DateTime.saturday:
+        return 'sábado';
+      case DateTime.sunday:
+        return 'domingo';
+      default:
+        return 'padrao';
     }
   }
 
@@ -189,82 +238,102 @@ class SalvarTratamento {
     return norm;
   }
 
-  /// Gera lembretes contínuos por dias, usando horários definidos por refeição.
-  /// Respeita (agora + 10min) no primeiro dia.
-  List<DateTime> _gerarLembretesPorRefeicao({
+  /// Gera lembretes por REFEIÇÃO até uma data-limite (janela).
+  List<DateTime> _gerarLembretesRefeicaoAte({
     required DateTime dataInicial,
     required List<String> refeicoes,
-    required List<dynamic>? horariosRefeicoesProvider, // array de maps
-    required int totalDoses,
+    required List<dynamic>? horariosRefeicoesProvider,
+    required DateTime endIncl,
   }) {
-    if (refeicoes.isEmpty) {
-      throw ArgumentError('refeicoesSelecionadas vazio');
-    }
-    if (totalDoses <= 0) {
-      throw ArgumentError('totalDoses deve ser > 0');
-    }
-
     final result = <DateTime>[];
     final agora = DateTime.now();
-    final limite = agora.add(const Duration(minutes: 10));
+    final limitePrimeiroDia = agora.add(const Duration(minutes: 10));
 
-    int diaOffset = 0;
-    while (result.length < totalDoses) {
-      final diaAtual = DateTime(
-        dataInicial.year, dataInicial.month, dataInicial.day,
-      ).add(Duration(days: diaOffset));
+    DateTime dia = DateTime(dataInicial.year, dataInicial.month, dataInicial.day);
 
-      final chaveDia = _diaSemanaPTBR(diaAtual);
+    while (!dia.isAfter(endIncl)) {
+      final chaveDia = _diaSemanaPTBR(dia);
       final cfgDia = _obterConfigDoDia(horariosRefeicoesProvider, chaveDia);
       final horariosHHmm = _horariosDasRefeicoesNoDia(cfgDia, refeicoes);
 
       for (final hhmm in horariosHHmm) {
-        if (result.length >= totalDoses) break;
-        final dt = _parseTimeOnDate(hhmm, diaAtual);
+        final dt = _parseTimeOnDate(hhmm, dia);
 
-        // Regra do primeiro dia: precisa ser >= (agora + 10min)
-        final isMesmoDiaDeHoje = dt.year == agora.year &&
-            dt.month == agora.month &&
-            dt.day == agora.day;
+        // se for hoje, respeitar +10 min
+        final mesmoDiaHoje = dt.year == agora.year && dt.month == agora.month && dt.day == agora.day;
+        if (mesmoDiaHoje && dt.isBefore(limitePrimeiroDia)) continue;
 
-        if (diaOffset == 0 && isMesmoDiaDeHoje && dt.isBefore(limite)) {
-          continue;
-        }
-
+        if (dt.isAfter(endIncl)) return result;
         result.add(dt);
       }
 
-      // Se no dia 0 nenhum horário serviu, vai para o dia seguinte
-      if (result.isEmpty && diaOffset == 0) {
-        diaOffset++;
-        continue;
-      }
-
-      if (result.length < totalDoses) {
-        diaOffset++;
-      }
+      dia = dia.add(const Duration(days: 1));
     }
-
     return result;
   }
 
-  /// Gera a lista de DateTimes (lembretes) em modo Horários Fixos.
+  /// Gera lembretes de HORÁRIOS FIXOS até uma data-limite.
+  List<DateTime> _gerarLembretesFixosAte({
+    required DateTime dataInicialDate,
+    required List<String> horariosHHmm,
+    required DateTime endIncl,
+  }) {
+    final horas = horariosHHmm.map(_parseHHmm).whereType<Duration>().toList()
+      ..sort((a, b) => a.inMinutes.compareTo(b.inMinutes));
+
+    if (horas.isEmpty) return [];
+
+    final result = <DateTime>[];
+    final agora = DateTime.now();
+    final limitePrimeiroDia = agora.add(const Duration(minutes: 10));
+
+    DateTime dia = DateTime(dataInicialDate.year, dataInicialDate.month, dataInicialDate.day);
+
+    while (!dia.isAfter(endIncl)) {
+      for (final h in horas) {
+        final dt = DateTime(dia.year, dia.month, dia.day).add(h);
+
+        // se for hoje, respeitar +10 min
+        final mesmoDiaHoje = dt.year == agora.year && dt.month == agora.month && dt.day == agora.day;
+        if (mesmoDiaHoje && dt.isBefore(limitePrimeiroDia)) continue;
+
+        if (dt.isAfter(endIncl)) return result;
+        result.add(dt);
+      }
+      dia = dia.add(const Duration(days: 1));
+    }
+    return result;
+  }
+
+  /// Gera lembretes por INTERVALO fixo até uma data-limite.
+  List<DateTime> _gerarLembretesIntervaloAte({
+    required DateTime startDateTime,
+    required int freqHoras,
+    required DateTime endIncl,
+  }) {
+    if (freqHoras <= 0) return [];
+    final out = <DateTime>[];
+    final nowPlus10 = DateTime.now().add(const Duration(minutes: 10));
+    var t = startDateTime.isBefore(nowPlus10) ? nowPlus10 : startDateTime;
+
+    while (!t.isAfter(endIncl)) {
+      out.add(t);
+      t = t.add(Duration(hours: freqHoras));
+    }
+    return out;
+  }
+
+  /// Gera a lista de DateTimes (lembretes) em modo Horários Fixos com TOTAL de doses.
   List<DateTime> _gerarLembretesFixos({
     required DateTime dataInicialDate,
     required List<String> horariosHHmm,
     required int totalDoses,
   }) {
-    if (horariosHHmm.isEmpty) {
-      throw ArgumentError('horariosFixos vazio');
-    }
-    if (totalDoses <= 0) {
-      throw ArgumentError('totalDoses deve ser > 0');
+    if (horariosHHmm.isEmpty || totalDoses <= 0) {
+      throw ArgumentError('Entradas inválidas em _gerarLembretesFixos');
     }
 
-    final horas = horariosHHmm
-        .map(_parseHHmm)
-        .whereType<Duration>()
-        .toList()
+    final horas = horariosHHmm.map(_parseHHmm).whereType<Duration>().toList()
       ..sort((a, b) => a.inMinutes.compareTo(b.inMinutes));
 
     if (horas.isEmpty) {
@@ -274,9 +343,7 @@ class SalvarTratamento {
     final agora = DateTime.now();
     final limite = agora.add(const Duration(minutes: 10));
 
-    final baseDia0 = DateTime(
-      dataInicialDate.year, dataInicialDate.month, dataInicialDate.day,
-    );
+    final baseDia0 = DateTime(dataInicialDate.year, dataInicialDate.month, dataInicialDate.day);
     final isDia0Hoje = baseDia0.year == agora.year &&
         baseDia0.month == agora.month &&
         baseDia0.day == agora.day;
@@ -315,166 +382,76 @@ class SalvarTratamento {
     return result;
   }
 
+  /// Gera lembretes por REFEIÇÃO com TOTAL de doses.
+  List<DateTime> _gerarLembretesPorRefeicao({
+    required DateTime dataInicial,
+    required List<String> refeicoes,
+    required List<dynamic>? horariosRefeicoesProvider, // array de maps
+    required int totalDoses,
+  }) {
+    if (refeicoes.isEmpty) {
+      throw ArgumentError('refeicoesSelecionadas vazio');
+    }
+    if (totalDoses <= 0) {
+      throw ArgumentError('totalDoses deve ser > 0');
+    }
+
+    final result = <DateTime>[];
+    final agora = DateTime.now();
+    final limite = agora.add(const Duration(minutes: 10));
+
+    int diaOffset = 0;
+    while (result.length < totalDoses) {
+      final diaAtual = DateTime(dataInicial.year, dataInicial.month, dataInicial.day)
+          .add(Duration(days: diaOffset));
+
+      final chaveDia = _diaSemanaPTBR(diaAtual);
+      final cfgDia = _obterConfigDoDia(horariosRefeicoesProvider, chaveDia);
+      final horariosHHmm = _horariosDasRefeicoesNoDia(cfgDia, refeicoes);
+
+      for (final hhmm in horariosHHmm) {
+        if (result.length >= totalDoses) break;
+        final dt = _parseTimeOnDate(hhmm, diaAtual);
+
+        // Regra do primeiro dia: precisa ser >= (agora + 10min)
+        final isMesmoDiaDeHoje = dt.year == agora.year &&
+            dt.month == agora.month &&
+            dt.day == agora.day;
+
+        if (diaOffset == 0 && isMesmoDiaDeHoje && dt.isBefore(limite)) {
+          continue;
+        }
+
+        result.add(dt);
+      }
+
+      if (result.isEmpty && diaOffset == 0) {
+        diaOffset++;
+        continue;
+      }
+
+      if (result.length < totalDoses) {
+        diaOffset++;
+      }
+    }
+
+    return result;
+  }
+
   // ------------------- Fluxo principal -------------------
   Future<void> criarTratamentoComLembretes() async {
-    final notificationService = NotificationService();
     final idUsuario = usuarioProvider.userId;
 
-    // Parse data/hora base
-    final DateTime data = _parseDate(dataInicial);
-    final DateTime hora = DateFormat("HH:mm").parse(horaInicial);
-    final DateTime dataHoraInicio = DateTime(
-      data.year, data.month, data.day, hora.hour, hora.minute,
-    );
+    // 1) Calcula o plano pelo Map
+    final plano = _calcularPlanoLembretesMap();
+    final datas = (plano['datas'] as List<DateTime>);
+    final freqStr = plano['freq'] as String;
+    final resumo = (plano['resumo'] as List<Map<String, dynamic>>);
 
-    // Cálculo robusto de total de doses
-    final qtdPorDose = _parseIntSafe(qtdMedicamento, fallback: 1);
-    final totalUnidades = _parseIntSafe(qtdMedicamentoTotal, fallback: 0);
-    final int totalDoses = (totalUnidades / (qtdPorDose <= 0 ? 1 : qtdPorDose)).floor();
-
+    // 2) Gera id do tratamento
     final String idTratamento = firestore
-        .collection('usuarios')
-        .doc(idUsuario)
-        .collection('tratamentos')
-        .doc()
-        .id;
-
-    final bool isFixos = horariosFixos.isNotEmpty;
-    final bool isRefeicao = !isFixos &&
-        tipoFrequencia == 'Junto com Refeições' &&
-        refeicoesSelecionadas.isNotEmpty;
-
-    // 1) Monta a grade de lembretes
-    late final List<DateTime> datasLembretes;
-    late final String frequenciaString;
-
-    if (isFixos) {
-      datasLembretes = _gerarLembretesFixos(
-        dataInicialDate: data,
-        horariosHHmm: horariosFixos,
-        totalDoses: totalDoses,
-      );
-      final dosesPorDia = horariosFixos.length;
-      frequenciaString = "${dosesPorDia}x ao dia";
-    } else if (isRefeicao) {
-      final horariosRefeicoesProvider = usuarioProvider.horariosRefeicoes; // array de objetos
-      datasLembretes = _gerarLembretesPorRefeicao(
-        dataInicial: data,
-        refeicoes: refeicoesSelecionadas,
-        horariosRefeicoesProvider: horariosRefeicoesProvider,
-        totalDoses: totalDoses,
-      );
-      frequenciaString = "${refeicoesSelecionadas.length}x ao dia (refeições)";
-    } else {
-      // Intervalo em horas
-      final int freqHoras = _parseIntSafe(frequenciaHoras, fallback: 8);
-      final nowPlus10 = DateTime.now().add(const Duration(minutes: 10));
-      final inicio = dataHoraInicio.isBefore(nowPlus10) ? nowPlus10 : dataHoraInicio;
-
-      datasLembretes = List.generate(
-        totalDoses,
-            (i) => inicio.add(Duration(hours: i * freqHoras)),
-      );
-      frequenciaString = "${(24 / freqHoras).round()}x ao dia";
-    }
-
-    // 2) Escreve lembretes e agenda notificações
-    final List<Map<String, dynamic>> lembretesArrayTratamento = [];
-    final List<Future<void>> tarefasLembretes = [];
-
-    for (final dataLembrete in datasLembretes) {
-      final String idLembrete = firestore
-          .collection('usuarios')
-          .doc(idUsuario)
-          .collection('lembretes')
-          .doc()
-          .id;
-      final int idNotificacao = idLembrete.hashCode.abs();
-
-      // se for refeição, tentar inferir qual momento foi usado neste dia
-      String momento = '';
-      if (isRefeicao) {
-        final chaveDia = _diaSemanaPTBR(dataLembrete);
-        final cfgDia = _obterConfigDoDia(usuarioProvider.horariosRefeicoes, chaveDia);
-        final mapaMomento = <String, String>{
-          'cafe':   (cfgDia?['horaCafe']   ?? '').toString(),
-          'almoco': (cfgDia?['horaAlmoco'] ?? '').toString(),
-          'jantar': (cfgDia?['horaJanta']  ?? '').toString(),
-        };
-        // encontra qual refeição bate com o horário HH:mm
-        final hh = dataLembrete.hour.toString().padLeft(2, '0');
-        final mm = dataLembrete.minute.toString().padLeft(2, '0');
-        final hhmm = '$hh:$mm';
-        for (final r in refeicoesSelecionadas) {
-          if (mapaMomento[r]?.trim() == hhmm) {
-            momento = r; // 'cafe' | 'almoco' | 'jantar'
-            break;
-          }
-        }
-      }
-
-      final lembreteDoc = {
-        'idTratamento': idTratamento,
-        'idNotificacao': idNotificacao,
-        'dataHoraAgendado': Timestamp.fromDate(dataLembrete),
-        'dataHoraTomado': null,
-        'tomado': false,
-        'adiado': false,
-        'notificado': false,
-        'idNovoLembrete': '',
-        'tipoTratamento': tipoTratamento ?? '',
-        'tipoFrequencia': tipoFrequencia,
-        'refeicao': momento,  // se refeição, guarda o momento
-        'momento': '',        // (pode ser usado no futuro para outras semânticas)
-        'cancelado': false,
-      };
-
-      tarefasLembretes.add(
-        firestore
-            .collection('usuarios')
-            .doc(idUsuario)
-            .collection('lembretes')
-            .doc(idLembrete)
-            .set(lembreteDoc),
-      );
-
-      tarefasLembretes.add(
-        notificationService.scheduleNotification(
-          id: idNotificacao,
-          title: 'Hora do medicamento',
-          body: '$nomeMedicamento $concentracaoMedicamento '
-              '(${qtdMedicamento} $unidadeMedida)',
-          scheduledDateTime: dataLembrete,
-          idLembrete: idLembrete,
-          idUsuario: idUsuario,
-        ),
-      );
-    }
-
-    // metadado resumido para o tratamento (como você já usava)
-    if (isFixos) {
-      for (final h in horariosFixos) {
-        lembretesArrayTratamento.add({
-          'tipo': tipoTratamento ?? '',
-          'valor': h,        // "HH:mm"
-          'momento': '',
-        });
-      }
-    } else if (isRefeicao) {
-      for (final r in refeicoesSelecionadas) {
-        lembretesArrayTratamento.add({
-          'tipo': tipoTratamento ?? '',
-          'valor': 'refeicao', // marcador genérico
-          'momento': r,        // 'cafe' | 'almoco' | 'jantar'
-        });
-      }
-    } else {
-      lembretesArrayTratamento.add({
-        'tipo': tipoTratamento ?? '',
-        'valor': frequenciaHoras,
-        'momento': '',
-      });
-    }
+        .collection('usuarios').doc(idUsuario)
+        .collection('tratamentos').doc().id;
 
     // 3) Documento do tratamento
     final idMedicamento = gerarIdMedicamento(
@@ -487,32 +464,89 @@ class SalvarTratamento {
       'concentracaoMedicamento': concentracaoMedicamento,
       'tipoMedicamento': tipoMedicamento,
       'dosagem': qtdMedicamento,
-      'frequencia': frequenciaString,
-      'dataInicio': Timestamp.fromDate(datasLembretes.first),
-      'dataTermino': Timestamp.fromDate(datasLembretes.last),
-      'lembretes': lembretesArrayTratamento,
+      'frequencia': freqStr,
+      'dataInicio': datas.isNotEmpty
+          ? Timestamp.fromDate(datas.first)
+          : Timestamp.fromDate(_parseDate(dataInicial)),
+      'dataTermino': isContinuo
+          ? null
+          : (datas.isNotEmpty ? Timestamp.fromDate(datas.last) : null),
+      'lembretes': resumo,
       'idCuidador': idCuidador ?? '',
       'observacoes': observacoes,
+      'tipoTratamento': tipoTratamento ?? '',
       'unidadeMedida': unidadeMedida,
       'status': 'ativo',
       'tipoFrequencia': tipoFrequencia,
+      'renovacaoAutomatica': isContinuo,
+      'janelaDias': isContinuo ? janelaPreGeracaoDias : null,
     };
 
     await firestore
-        .collection('usuarios')
-        .doc(idUsuario)
-        .collection('tratamentos')
-        .doc(idTratamento)
+        .collection('usuarios').doc(idUsuario)
+        .collection('tratamentos').doc(idTratamento)
         .set(tratamentoDoc);
 
-    await Future.wait(tarefasLembretes);
+    // 4) Lembretes + notificações
+    await _gravarLembretesENotificacoes(
+      idUsuario: idUsuario,
+      idTratamento: idTratamento,
+      datasLembretes: datas,
+    );
 
-    // 4) Estoque
-    final novoEstoque = {
-      'qtdAtual': _parseIntSafe(qtdMedicamentoEstoqueCtrl),
-      'qtdMinima': _parseIntSafe(qtdEstoqueMinimoCtrl, fallback: 0),
-      'dataValidade': DateFormat('dd/MM/yyyy').parse(dataValidadeCtrl),
+    // 5) Estoque
+    final idMed = idMedicamento;
+    await _salvarEstoque(
+      firestore: firestore,
+      usuarioProvider: usuarioProvider,
+      idUsuario: idUsuario,
+      idMedicamento: idMed,
+      qtdMedicamentoEstoqueCtrl: qtdMedicamentoEstoqueCtrl,
+      qtdEstoqueMinimoCtrl: qtdEstoqueMinimoCtrl,
+      dataValidadeCtrl: dataValidadeCtrl,
+    );
+  }
+
+  // ===========================================================
+// Função auxiliar para salvar estoque
+// ===========================================================
+  Future<void> _salvarEstoque({
+    required FirebaseFirestore firestore,
+    required UsuarioProvider usuarioProvider,
+    required String idUsuario,
+    required String idMedicamento,
+    required String qtdMedicamentoEstoqueCtrl,
+    required String qtdEstoqueMinimoCtrl,
+    required String dataValidadeCtrl,
+  }) async {
+    final String sQtdAtual = qtdMedicamentoEstoqueCtrl.trim();
+    final String sQtdMin = qtdEstoqueMinimoCtrl.trim();
+    final String sValidade = dataValidadeCtrl.trim();
+
+    // Regra 1: se qtdAtual não foi informada, NÃO cria/atualiza estoque
+    if (sQtdAtual.isEmpty) return;
+
+    // Monta o mapa somente com campos válidos
+    final Map<String, dynamic> novoEstoque = {
+      'qtdAtual': int.tryParse(sQtdAtual) ?? 0,
     };
+
+    // Adiciona qtdMinima se veio preenchida
+    final int? qtdMinimaParsed =
+    sQtdMin.isNotEmpty ? int.tryParse(sQtdMin) : null;
+    if (qtdMinimaParsed != null) {
+      novoEstoque['qtdMinima'] = qtdMinimaParsed;
+    }
+
+    // Adiciona dataValidade se veio preenchida e válida
+    if (sValidade.isNotEmpty) {
+      try {
+        final dt = DateFormat('dd/MM/yyyy').parseStrict(sValidade);
+        novoEstoque['dataValidade'] = dt;
+      } catch (_) {
+        // inválida → ignora
+      }
+    }
 
     final estoqueMap = usuarioProvider.estoqueMap;
     final estoqueRef = firestore
@@ -523,17 +557,266 @@ class SalvarTratamento {
 
     if (estoqueMap.containsKey(idMedicamento)) {
       await estoqueRef.update(novoEstoque);
-      estoqueMap[idMedicamento] = novoEstoque;
+
+      // mescla no cache
+      final atual = Map<String, dynamic>.from(
+        estoqueMap[idMedicamento] as Map,
+      );
+      atual.addAll(novoEstoque);
+      estoqueMap[idMedicamento] = atual;
     } else {
       await estoqueRef.set(novoEstoque);
       estoqueMap[idMedicamento] = novoEstoque;
     }
   }
-
   String gerarIdMedicamento(String nome, String conc, String tipo) {
-    return '${nome.trim()}|${conc.trim()}|${tipo.trim()}'
+    final normalized = [nome, conc, tipo]
+        .map((s) => removeDiacritics(s)
         .toLowerCase()
-        .hashCode
-        .toString();
+        .trim()
+        .replaceAll(RegExp(r'\s+'), ' '))
+        .join('|');
+
+    return normalized.toString();
   }
+
+
+  Future<void> atualizarTratamento({required String idTratamento}) async {
+    final idUsuario = usuarioProvider.userId;
+    final docTrat = firestore
+        .collection('usuarios').doc(idUsuario)
+        .collection('tratamentos').doc(idTratamento);
+
+    // 1) Recalcula plano com base nos novos inputs
+    final plano = _calcularPlanoLembretesMap();
+    final datas = (plano['datas'] as List<DateTime>);
+    final freqStr = plano['freq'] as String;
+    final resumo = (plano['resumo'] as List<Map<String, dynamic>>);
+
+    // 2) Monta payload
+    final idMedicamento = gerarIdMedicamento(
+      nomeMedicamento, concentracaoMedicamento, tipoMedicamento,
+    );
+
+    final payloadTrat = <String, dynamic>{
+      'idMedicamento': idMedicamento,
+      'nomeMedicamento': nomeMedicamento,
+      'tipoMedicamento': tipoMedicamento,
+      'concentracaoMedicamento': concentracaoMedicamento,
+      'dosagem': qtdMedicamento,
+      'qtdMedicamento': qtdMedicamento,
+      'qtdMedicamentoTotal': qtdMedicamentoTotal,
+      'tipoTratamento': tipoTratamento,
+      'frequenciaHoras': frequenciaHoras,
+      'frequencia': freqStr,
+      'dataInicio': datas.isNotEmpty
+          ? Timestamp.fromDate(datas.first)
+          : Timestamp.fromDate(_parseDate(dataInicial)),
+      'dataTermino': isContinuo
+          ? null
+          : (datas.isNotEmpty ? Timestamp.fromDate(datas.last) : null),
+      'observacoes': observacoes,
+      'tipoFrequencia': tipoFrequencia,
+      'status': 'ativo', // preserve se quiser: leia o doc atual e reaplique
+      'unidadeMedida': unidadeMedida,
+      'lembretes': resumo,
+      'renovacaoAutomatica': isContinuo,
+      'janelaDias': isContinuo ? janelaPreGeracaoDias : null,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+
+    // 3) Atualiza tratamento
+    await docTrat.update(payloadTrat);
+
+    // 4) Regrava lembretes e notificações
+    await _gravarLembretesENotificacoes(
+      idUsuario: idUsuario,
+      idTratamento: idTratamento,
+      datasLembretes: datas,
+    );
+
+    // 5) Estoque (se informado)
+    await _salvarEstoque(
+      firestore: firestore,
+      usuarioProvider: usuarioProvider,
+      idUsuario: idUsuario,
+      idMedicamento: idMedicamento,
+      qtdMedicamentoEstoqueCtrl: qtdMedicamentoEstoqueCtrl,
+      qtdEstoqueMinimoCtrl: qtdEstoqueMinimoCtrl,
+      dataValidadeCtrl: dataValidadeCtrl,
+    );
+  }
+
+  Map<String, dynamic> _calcularPlanoLembretesMap() {
+    // Base
+    final DateTime data = _parseDate(dataInicial);
+    final DateTime dataHoraInicioIntervalo = _safeStartInterval(data);
+
+    // total de doses (modo não-contínuo)
+    final qtdPorDose = _parseIntSafe(qtdMedicamento, fallback: 1);
+    final totalUnidades = _parseIntSafe(qtdMedicamentoTotal, fallback: 0);
+    final int totalDoses = (qtdPorDose <= 0) ? 0 : (totalUnidades / qtdPorDose).floor();
+
+    final bool isFixos = horariosFixos.isNotEmpty;
+    final bool isRefeicaoSelecionada = !isFixos &&
+        tipoFrequencia == 'Junto com Refeições' &&
+        refeicoesSelecionadas.isNotEmpty;
+
+    late final List<DateTime> datasLembretes;
+    late final String freqStr;
+    final List<Map<String, dynamic>> resumo = [];
+
+    if (isContinuo) {
+      // Janela de pré-geração
+      final DateTime endDia  = DateTime(data.year, data.month, data.day)
+          .add(Duration(days: janelaPreGeracaoDias - 1));
+      final DateTime endIncl = _endOfDay(endDia);
+
+      if (isFixos) {
+        datasLembretes = _gerarLembretesFixosAte(
+          dataInicialDate: data,
+          horariosHHmm: horariosFixos,
+          endIncl: endIncl,
+        );
+        final dosesPorDia = horariosFixos.length;
+        freqStr = "${dosesPorDia}x ao dia";
+        for (final h in horariosFixos) {
+          resumo.add({'tipo': tipoTratamento ?? '', 'valor': h, 'momento': ''});
+        }
+      } else if (isRefeicaoSelecionada) {
+        final horariosRefeicoesProvider = usuarioProvider.horariosRefeicoes;
+        datasLembretes = _gerarLembretesRefeicaoAte(
+          dataInicial: data,
+          refeicoes: refeicoesSelecionadas,
+          horariosRefeicoesProvider: horariosRefeicoesProvider,
+          endIncl: endIncl,
+        );
+        freqStr = "${refeicoesSelecionadas.length}x ao dia";
+        for (final r in refeicoesSelecionadas) {
+          resumo.add({'tipo': tipoTratamento ?? '', 'valor': 'refeicao', 'momento': r});
+        }
+      } else {
+        final int freqHoras = _parseIntSafe(frequenciaHoras, fallback: 8);
+        datasLembretes = _gerarLembretesIntervaloAte(
+          startDateTime: dataHoraInicioIntervalo,
+          freqHoras: freqHoras,
+          endIncl: endIncl,
+        );
+        final porDia = (24 / (freqHoras <= 0 ? 24 : freqHoras)).round();
+        freqStr = "${porDia}x ao dia";
+        resumo.add({'tipo': tipoTratamento ?? '', 'valor': frequenciaHoras, 'momento': ''});
+      }
+    } else {
+      // Determinado / Dose única (usa TOTAL de doses)
+      if (isFixos) {
+        datasLembretes = _gerarLembretesFixos(
+          dataInicialDate: data,
+          horariosHHmm: horariosFixos,
+          totalDoses: totalDoses,
+        );
+        final dosesPorDia = horariosFixos.length;
+        freqStr = "${dosesPorDia}x ao dia";
+        for (final h in horariosFixos) {
+          resumo.add({'tipo': tipoTratamento ?? '', 'valor': h, 'momento': ''});
+        }
+      } else if (isRefeicaoSelecionada) {
+        final horariosRefeicoesProvider = usuarioProvider.horariosRefeicoes;
+        datasLembretes = _gerarLembretesPorRefeicao(
+          dataInicial: data,
+          refeicoes: refeicoesSelecionadas,
+          horariosRefeicoesProvider: horariosRefeicoesProvider,
+          totalDoses: totalDoses,
+        );
+        freqStr = "${refeicoesSelecionadas.length}x ao dia (refeições)";
+        for (final r in refeicoesSelecionadas) {
+          resumo.add({'tipo': tipoTratamento ?? '', 'valor': 'refeicao', 'momento': r});
+        }
+      } else {
+        final int freqHoras = _parseIntSafe(frequenciaHoras, fallback: 8);
+        final nowPlus10 = DateTime.now().add(const Duration(minutes: 10));
+        final inicio = dataHoraInicioIntervalo.isBefore(nowPlus10) ? nowPlus10 : dataHoraInicioIntervalo;
+
+        datasLembretes = List.generate(
+          totalDoses,
+              (i) => inicio.add(Duration(hours: i * freqHoras)),
+        );
+        final porDia = (24 / (freqHoras <= 0 ? 24 : freqHoras)).round();
+        freqStr = "${porDia}x ao dia";
+        resumo.add({'tipo': tipoTratamento ?? '', 'valor': frequenciaHoras, 'momento': ''});
+      }
+    }
+
+    return {
+      'datas': datasLembretes,                       // List<DateTime>
+      'freq': freqStr,                               // String
+      'resumo': resumo,                              // List<Map<String,dynamic>>
+      'isRefeicao': isRefeicaoSelecionada,           // bool
+    };
+  }
+  Future<void> _gravarLembretesENotificacoes({
+    required String idUsuario,
+    required String idTratamento,
+    required List<DateTime> datasLembretes,
+  }) async {
+    final notificationService = NotificationService();
+
+    // limpa antigos (útil na edição)
+    final antigos = await firestore
+        .collection('usuarios').doc(idUsuario)
+        .collection('lembretes')
+        .where('idTratamento', isEqualTo: idTratamento)
+        .get();
+
+    for (final d in antigos.docs) {
+      try { await d.reference.delete(); } catch (_) {}
+    }
+
+    // cria novos + notifica
+    final List<Future<void>> pend = [];
+    for (final dataLembrete in datasLembretes) {
+      final String idLembrete = firestore
+          .collection('usuarios').doc(idUsuario)
+          .collection('lembretes').doc().id;
+
+      final int idNotificacao = idLembrete.hashCode.abs();
+
+      final lembreteDoc = {
+        'idTratamento': idTratamento,
+        'idNotificacao': idNotificacao,
+        'dataHoraAgendado': Timestamp.fromDate(dataLembrete),
+        'dataHoraTomado': null,
+        'tomado': false,
+        'adiado': false,
+        'notificado': false,
+        'idNovoLembrete': '',
+        'tipoTratamento': tipoTratamento ?? '',
+        'tipoFrequencia': tipoFrequencia,
+        'refeicao': '', // se quiser preencher café/almoco/jantar, dá pra inferir aqui
+        'momento': '',
+        'cancelado': false,
+      };
+
+      pend.add(
+        firestore
+            .collection('usuarios').doc(idUsuario)
+            .collection('lembretes').doc(idLembrete)
+            .set(lembreteDoc),
+      );
+
+      pend.add(
+        notificationService.scheduleNotification(
+          id: idNotificacao,
+          title: 'Hora do medicamento',
+          body: '$nomeMedicamento $concentracaoMedicamento '
+              '(${qtdMedicamento} $unidadeMedida)',
+          scheduledDateTime: dataLembrete,
+          idLembrete: idLembrete,
+          idUsuario: idUsuario,
+        ),
+      );
+    }
+
+    await Future.wait(pend);
+  }
+
 }

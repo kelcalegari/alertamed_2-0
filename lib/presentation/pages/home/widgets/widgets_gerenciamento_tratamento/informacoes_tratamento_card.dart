@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
 import '../../../../shared/widgets/custom_seletor_field.dart';
 import '../../../../shared/widgets/custom_text_field.dart';
 import '../../../../themes/app_colors.dart';
@@ -33,7 +35,6 @@ class InformacoesAdicionais extends StatefulWidget {
     required this.onUnidadesMedidaChanged,
     required this.onCompartilharTratamentoChanged,
     required this.onPressedSalvar,
-
   }) : super(key: key);
 
   @override
@@ -53,18 +54,14 @@ class _InformacoesAdicionaisState extends State<InformacoesAdicionais> {
             const Text(
               "Informações Adicionais",
               style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textVerde,
+                fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textVerde,
               ),
             ),
             const SizedBox(height: 16),
             const Text(
               "Estoque",
               style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-                color: AppColors.textVerde,
+                fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.textVerde,
               ),
             ),
             const SizedBox(height: 8),
@@ -95,13 +92,10 @@ class _InformacoesAdicionaisState extends State<InformacoesAdicionais> {
                   child: CustomSelectorField<String>(
                     selectedValue: widget.selectedUnidadesMedida,
                     items: widget.vectorUnidadesMedida
-                        .map((g) => DropdownMenuItem(
-                      value: g,
-                      child: Text(g),
-                    ))
+                        .map((g) => DropdownMenuItem(value: g, child: Text(g)))
                         .toList(),
                     onChanged: widget.onUnidadesMedidaChanged,
-                    hint: widget.vectorUnidadesMedida[0],
+                    hint: widget.vectorUnidadesMedida.isNotEmpty ? widget.vectorUnidadesMedida[0] : "unidade",
                     pad: 0,
                   ),
                 ),
@@ -128,13 +122,10 @@ class _InformacoesAdicionaisState extends State<InformacoesAdicionais> {
             CustomSelectorField<String>(
               selectedValue: widget.selectedCompartilharTratamento,
               items: widget.vectorCompartilharTratamento
-                  .map((g) => DropdownMenuItem(
-                value: g,
-                child: Text(g),
-              ))
+                  .map((g) => DropdownMenuItem(value: g, child: Text(g)))
                   .toList(),
               onChanged: widget.onCompartilharTratamentoChanged,
-              hint: widget.vectorCompartilharTratamento[0],
+              hint: widget.vectorCompartilharTratamento.isNotEmpty ? widget.vectorCompartilharTratamento[0] : "Não",
               pad: 0,
               label: "Compartilhar o Tratamento?",
               validador: (value) =>
@@ -146,15 +137,10 @@ class _InformacoesAdicionaisState extends State<InformacoesAdicionais> {
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.botoesVerdes,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                 ),
                 onPressed: widget.onPressedSalvar,
-                child: const Text(
-                  "Salvar",
-                  style: TextStyle(color: AppColors.textBranco),
-                ),
+                child: const Text("Salvar", style: TextStyle(color: AppColors.textBranco)),
               ),
             ),
           ],

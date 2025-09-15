@@ -21,11 +21,17 @@ class TratamentosCard extends StatelessWidget {
       if (t['status']?.toLowerCase() == 'cancelado') return false;
 
       final dataInicio = (t['dataInicio'] as Timestamp).toDate();
-      final dataTermino = (t['dataTermino'] as Timestamp).toDate();
+      final Timestamp? dataTerminoTs = t['dataTermino'] as Timestamp?;
+      final DateTime? dataTermino = dataTerminoTs?.toDate();
 
-      return dataReferencia.isAfter(dataInicio.subtract(const Duration(days: 1))) &&
-          dataReferencia.isBefore(dataTermino.add(const Duration(days: 1)));
+      final depoisDoInicio = dataReferencia.isAfter(dataInicio.subtract(const Duration(days: 1)));
+      final antesDoTermino = dataTermino == null
+          ? true // se não tem término, não limita
+          : dataReferencia.isBefore(dataTermino.add(const Duration(days: 1)));
+
+      return depoisDoInicio && antesDoTermino;
     }).toList();
+
 
     if (tratamentos.isEmpty) {
       return Container(

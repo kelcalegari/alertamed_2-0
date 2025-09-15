@@ -21,6 +21,10 @@ class CustomTextField extends StatefulWidget {
   final void Function(DateTime date)? onDatePicked;
   final TimeOfDay? initialTime;
 
+  // >>> NOVOS (opcionais)
+  final bool? readOnly;          // se null, aplica lógica padrão (data/hora = readOnly)
+  final VoidCallback? onTap;     // se null, aplica pickers quando for data/hora
+
   const CustomTextField({
     super.key,
     required this.ctrl,
@@ -37,8 +41,12 @@ class CustomTextField extends StatefulWidget {
     this.validador,
     this.focusNode,
     this.onComplete,
-    this.onTapOutside, this.initialTime,    this.onTimePicked,
+    this.onTapOutside,
+    this.initialTime,
+    this.onTimePicked,
     this.onDatePicked,
+    this.readOnly,       // novo
+    this.onTap,          // novo
   });
 
   @override
@@ -50,103 +58,107 @@ class _CustomTextFieldState extends State<CustomTextField> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDateField = widget.textInputType == TextInputType.datetime;
+    final bool defaultReadOnly = isDateField || widget.isTime;
+    final bool effectiveReadOnly = widget.readOnly ?? defaultReadOnly;
+
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: widget.pad),
       child: TextFormField(
         focusNode: widget.focusNode,
         controller: widget.ctrl,
         keyboardType: widget.textInputType,
-        textCapitalization: widget.isPassword ? TextCapitalization.none : TextCapitalization.sentences,
+        textCapitalization:
+        widget.isPassword ? TextCapitalization.none : TextCapitalization.sentences,
         maxLength: widget.maxLength > 0 ? widget.maxLength : null,
         maxLines: widget.maxLines,
         obscureText: widget.isPassword && !_passVisible,
         validator: widget.validador,
         style: TextStyle(fontSize: widget.fontSize, color: AppColors.textVerde),
-        readOnly: widget.textInputType == TextInputType.datetime || widget.isTime,
-        onTap: (widget.textInputType == TextInputType.datetime || widget.isTime)
-            ? () async {
-          if (widget.textInputType == TextInputType.datetime) {
-            // --- DATE PICKER ---
-            DateTime initialDate;
-            try {
-              final parts = widget.ctrl.text.split('/');
-              if (parts.length == 3) {
-                final day = int.parse(parts[0]);
-                final month = int.parse(parts[1]);
-                final year = int.parse(parts[2]);
-                initialDate = DateTime(year, month, day);
-              } else {
-                initialDate = DateTime.now();
-              }
-            } catch (_) {
-              initialDate = DateTime.now();
-            }
 
-            final picked = await showDatePicker(
-              context: context,
-              initialDate: initialDate,
-              firstDate: DateTime(1900),
-              lastDate: DateTime(2100),
-            );
-            if (picked != null) {
-              widget.ctrl.text =
-              "${picked.day.toString().padLeft(2, '0')}/"
-                  "${picked.month.toString().padLeft(2, '0')}/"
-                  "${picked.year}";
-              // dispara validação/ações
-              widget.onDatePicked?.call(picked);
-              widget.onComplete?.call();
-              FocusScope.of(context).unfocus();
-            }
-          } else if (widget.isTime) {
-            // --- TIME PICKER (24h + HH:mm) ---
-            TimeOfDay initial =
-                widget.initialTime ??
+        // >>> READONLY opcional
+        readOnly: effectiveReadOnly,
+
+        // >>> ONTAP opcional (se fornecido, usa ele; senão mantém os pickers para data/hora)
+        onTap: widget.onTap ??
+            ((isDateField || widget.isTime)
+                ? () async {
+              if (isDateField) {
+                // --- DATE PICKER ---
+                DateTime initialDate;
+                try {
+                  final parts = widget.ctrl.text.split('/');
+                  if (parts.length == 3) {
+                    final day = int.parse(parts[0]);
+                    final month = int.parse(parts[1]);
+                    final year = int.parse(parts[2]);
+                    initialDate = DateTime(year, month, day);
+                  } else {
+                    initialDate = DateTime.now();
+                  }
+                } catch (_) {
+                  initialDate = DateTime.now();
+                }
+
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: initialDate,
+                  firstDate: DateTime(1900),
+                  lastDate: DateTime(2100),
+                );
+                if (picked != null) {
+                  widget.ctrl.text =
+                  "${picked.day.toString().padLeft(2, '0')}/"
+                      "${picked.month.toString().padLeft(2, '0')}/"
+                      "${picked.year}";
+                  widget.onDatePicked?.call(picked);
+                  widget.onComplete?.call();
+                  FocusScope.of(context).unfocus();
+                }
+              } else if (widget.isTime) {
+                // --- TIME PICKER (24h + HH:mm) ---
+                TimeOfDay initial = widget.initialTime ??
                     (() {
-                      // tenta parsear HH:mm já presente
                       final t = widget.ctrl.text.trim();
                       final p = t.split(':');
                       if (p.length == 2) {
                         final h = int.tryParse(p[0]);
                         final m = int.tryParse(p[1]);
-                        if (h != null && m != null) return TimeOfDay(hour: h, minute: m);
+                        if (h != null && m != null) {
+                          return TimeOfDay(hour: h, minute: m);
+                        }
                       }
                       return TimeOfDay.now();
                     })();
 
-            final picked = await showTimePicker(
-              context: context,
-              initialTime: initial,
-              builder: (ctx, child) {
-                // força relógio 24h
-                return MediaQuery(
-                  data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
-                  child: child!,
+                final picked = await showTimePicker(
+                  context: context,
+                  initialTime: initial,
+                  builder: (ctx, child) {
+                    return MediaQuery(
+                      data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
+                      child: child!,
+                    );
+                  },
                 );
-              },
-            );
 
-            if (picked != null) {
-              // formata HH:mm (24h)
-              final hh = picked.hour.toString().padLeft(2, '0');
-              final mm = picked.minute.toString().padLeft(2, '0');
-              widget.ctrl.text = "$hh:$mm";
-
-              widget.onTimePicked?.call(picked);
-              widget.onComplete?.call();
-
-              // opcional: tirar foco para já mostrar erro/ok visual
-              FocusScope.of(context).unfocus();
+                if (picked != null) {
+                  final hh = picked.hour.toString().padLeft(2, '0');
+                  final mm = picked.minute.toString().padLeft(2, '0');
+                  widget.ctrl.text = "$hh:$mm";
+                  widget.onTimePicked?.call(picked);
+                  widget.onComplete?.call();
+                  FocusScope.of(context).unfocus();
+                }
+              }
             }
-          }
-        }
-            : null,
+                : null),
 
         decoration: InputDecoration(
-          isDense: true, // deixa mais compacto
+          isDense: true,
           contentPadding: const EdgeInsets.symmetric(
-            vertical: 15, // altura interna
-            horizontal: 8, // distância lateral
+            vertical: 15,
+            horizontal: 8,
           ),
           labelText: widget.label,
           hintText: widget.hint,

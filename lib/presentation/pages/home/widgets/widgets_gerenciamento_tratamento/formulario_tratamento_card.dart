@@ -47,6 +47,25 @@ class FormularioTratamento extends StatefulWidget {
 class _FormularioTratamentoState extends State<FormularioTratamento> {
   @override
   Widget build(BuildContext context) {
+    final isDoseUnica =
+        widget.selectedTipoTratamento == 'Tratamento Dose única';
+
+    // opções filtradas para Dose única (remove "Intervalos Fixos")
+    final List<String> freqOptions = isDoseUnica
+        ? widget.vectorTipoFrequencia
+        .where((f) => f != 'Intervalos Fixos')
+        .toList()
+        : widget.vectorTipoFrequencia;
+
+    // se a seleção atual ficou inválida, troca para a primeira válida
+    if (isDoseUnica &&
+        widget.selectedTipoFrequencia == 'Intervalos Fixos' &&
+        freqOptions.isNotEmpty) {
+      // evita setState no build: agenda para pós-frame
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        widget.onTipoFrequenciaChanged(freqOptions.first);
+      });
+    }
     return Form(
       key: widget.formKeyIndexUm,
       child: Padding(
@@ -136,12 +155,12 @@ class _FormularioTratamentoState extends State<FormularioTratamento> {
             const SizedBox(height: 12),
             CustomSelectorField<String>(
               selectedValue: widget.selectedTipoFrequencia,
-              items: widget.vectorTipoFrequencia
+              items: freqOptions
                   .map((g) => DropdownMenuItem(value: g, child: Text(g)))
                   .toList(),
               onChanged: widget.onTipoFrequenciaChanged,
               label: "Tipo de Frequência",
-              hint: widget.vectorTipoFrequencia[0],
+              hint: freqOptions.isNotEmpty ? freqOptions.first : null,
               pad: 10,
               validador: (value) =>
               value == null ? "Informe o tipo da frequência" : null,

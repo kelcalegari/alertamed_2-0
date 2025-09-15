@@ -1,4 +1,5 @@
 import 'package:smartmed/presentation/pages/home/widgets/assistente_card.dart';
+import 'package:smartmed/presentation/pages/home/widgets/gerar_relatorio_card.dart';
 import 'package:smartmed/presentation/pages/home/widgets/gerenciador_tratamento.dart';
 import 'package:smartmed/presentation/pages/home/widgets/historico_card.dart';
 import 'package:smartmed/presentation/pages/home/widgets/informacao_tratamento.dart';
@@ -26,8 +27,10 @@ class _HomePageState extends State<HomePage> {
   bool mostrandoCardTratamento = false;
   bool mostrandoCardInformacaoTratamento = false;
   bool mostrandoCardAssistenteIa = false;
+  bool mostrandoCardRelatorio = false;
   DateTime? _lastBackPressTime;
   Map<String, dynamic>? tratamentoSelecionado;
+  String? idTratamentoEditar;
 
   @override
   Widget build(BuildContext context) {
@@ -36,12 +39,16 @@ class _HomePageState extends State<HomePage> {
       onPopInvokedWithResult: (bool didPop, Object? result) async {
         if (mostrandoCardSintoma ||
             mostrandoCardTratamento ||
-            mostrandoCardInformacaoTratamento || mostrandoCardAssistenteIa) {
+            mostrandoCardInformacaoTratamento ||
+            mostrandoCardAssistenteIa ||
+            mostrandoCardRelatorio) {
           setState(() {
             mostrandoCardSintoma = false;
             mostrandoCardTratamento = false;
             mostrandoCardInformacaoTratamento = false;
             mostrandoCardAssistenteIa = false;
+            mostrandoCardRelatorio = false;
+            idTratamentoEditar = null;
           });
           return;
         }
@@ -73,13 +80,13 @@ class _HomePageState extends State<HomePage> {
               ),
               Expanded(
                 child:
-                mostrandoCardAssistenteIa
-                    ? CardAssistenteIA(
-                  onClose: () {
-                    setState(() => mostrandoCardSintoma = false);
-                  }
-                )
-                    :mostrandoCardSintoma
+                    mostrandoCardAssistenteIa
+                        ? CardAssistenteIA(
+                          onClose: () {
+                            setState(() => mostrandoCardSintoma = false);
+                          },
+                        )
+                        : mostrandoCardSintoma
                         ? CardAdicionarSintomas(
                           onCancel: () {
                             setState(() => mostrandoCardSintoma = false);
@@ -92,19 +99,40 @@ class _HomePageState extends State<HomePage> {
                         : mostrandoCardTratamento
                         ? GerenciadorTratamento(
                           onCancel:
-                              () => setState(
-                                () => mostrandoCardTratamento = false,
-                              ),
+                              () => setState(() {
+                                mostrandoCardTratamento = false;
+
+                                idTratamentoEditar = null;
+                              }),
                           onConcluir: () {
                             _handleRefresh();
                             setState(() => mostrandoCardTratamento = false);
                           },
+                          idTratamento: idTratamentoEditar,
                         )
                         : mostrandoCardInformacaoTratamento
                         ? InformacaoTratamento(
-                      tratamento: tratamentoSelecionado!,
-                      onCancel: () => setState(() => mostrandoCardInformacaoTratamento = false),
-                    )
+                          tratamento: tratamentoSelecionado!,
+                          onCancel:
+                              () => setState(
+                                () => mostrandoCardInformacaoTratamento = false,
+                              ),
+                          idUsuario: context.read<UsuarioProvider>().userId,
+                          onEditar: (String value) {
+                            setState(() {
+                              idTratamentoEditar = value;
+                              mostrandoCardInformacaoTratamento = false;
+                              mostrandoCardTratamento = true;
+                            });
+                          },
+                        )
+                        : mostrandoCardRelatorio
+                        ? CardGerarRelatorio(
+                          onCancel: () {
+                            setState(() => mostrandoCardRelatorio = false);
+                          },
+
+                        )
                         : Container(
                           decoration: const BoxDecoration(
                             color: AppColors.cardBackgroundBranco,
@@ -131,10 +159,15 @@ class _HomePageState extends State<HomePage> {
                                     },
                                     onCardAssistenteIa: () {
                                       setState(
-                                            () => mostrandoCardAssistenteIa = true,
+                                        () => mostrandoCardAssistenteIa = true,
                                       );
                                     },
                                     dia: diaSelecionado ?? DateTime.now(),
+                                    onCardRelatorio: () {
+                                      setState(
+                                            () => mostrandoCardRelatorio = true,
+                                      );
+                                    },
                                   ),
                                   Transform.translate(
                                     offset: const Offset(0, -80),

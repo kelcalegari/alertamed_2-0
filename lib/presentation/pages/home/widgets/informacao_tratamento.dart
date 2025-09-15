@@ -4,15 +4,20 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../../../providers/user_data_provider.dart';
 import '../../../themes/app_colors.dart';
+import '../service/alterar_lembrete.dart';
 
 class InformacaoTratamento extends StatelessWidget {
   final VoidCallback onCancel;
   final Map<String, dynamic> tratamento;
+  final String idUsuario;
+  final ValueChanged<String> onEditar;
 
   const InformacaoTratamento({
     super.key,
     required this.onCancel,
     required this.tratamento,
+    required this.idUsuario, required this.onEditar
+
   });
 
   // ===================== Helpers =====================
@@ -123,6 +128,15 @@ class InformacaoTratamento extends StatelessWidget {
     final String tipoFrequencia = (tratamento['tipoFrequencia'] ?? '').toString();
 
     final usuarioProvider = Provider.of<UsuarioProvider>(context);
+    final String tipoTratamento = (tratamento['tipoTratamento'] ?? '').toString();
+    final String status = (tratamento['status'] ?? '').toString();
+
+    final bool isContinuo = tipoTratamento.trim().toLowerCase() == 'tratamento contínuo';
+    final bool inativado = ['finalizado', 'inativado', 'cancelado']
+        .contains(status.toLowerCase());
+    final String terminoStr = (isContinuo && !inativado)
+        ? '—' // contínuo e ainda ativo: sem término
+        : _formatData(tratamento['dataTermino'] as Timestamp?);
     final String idMedicamento = (tratamento['idMedicamento'] ?? '').toString();
     final Map<String, dynamic>? estoque = usuarioProvider.estoqueMap[idMedicamento];
 
@@ -236,6 +250,11 @@ class InformacaoTratamento extends StatelessWidget {
                           value: tipoFrequencia.isEmpty ? 'Não informada' : tipoFrequencia,
                           color: AppColors.textBranco,
                         ),
+                        _InfoRow(
+                          label: 'Tipo de tratamento',
+                          value: tipoTratamento.isEmpty ? 'Não informada' : tipoTratamento,
+                          color: AppColors.textBranco,
+                        ),
 
                         // ---- Caso específico: Refeições ----
                         if (refeicoes.isNotEmpty)
@@ -268,7 +287,7 @@ class InformacaoTratamento extends StatelessWidget {
                         ),
                         _InfoRow(
                           label: 'Término',
-                          value: _formatData(tratamento['dataTermino'] as Timestamp?),
+                          value: terminoStr,
                           color: AppColors.textBranco,
                         ),
                         _InfoRow(
@@ -379,7 +398,7 @@ class InformacaoTratamento extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(30),
                               ),
                             ),
-                            onPressed: onCancel,
+                            onPressed: () => onEditar(tratamento['idTratamento'] as String),
                             child: const Text(
                               'Editar',
                               style: TextStyle(
@@ -398,7 +417,9 @@ class InformacaoTratamento extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(30),
                               ),
                             ),
-                            onPressed: onCancel,
+                            onPressed: () async {await LembreteService().finalizarTratamento(context: context, idUsuario: idUsuario, idTratamento: tratamento['idTratamento']);
+                            onCancel();
+                            },
                             child: const Text(
                               'Concluir Tratamento',
                               style: TextStyle(

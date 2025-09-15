@@ -1,6 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
+import 'dart:convert';
+import 'package:diacritic/diacritic.dart';
 import '../../../../providers/user_data_provider.dart';
 import '../../../themes/app_colors.dart';
 import 'package:intl/intl.dart';
@@ -14,15 +16,20 @@ class GerenciadorTratamento extends StatefulWidget {
   final VoidCallback onCancel;
   final VoidCallback onConcluir;
 
+  /// Se for null => criação. Se não for null => edição.
+  final String? idTratamento;
+
   const GerenciadorTratamento({
     Key? key,
     required this.onCancel,
     required this.onConcluir,
+    this.idTratamento,
   }) : super(key: key);
 
   @override
   State<GerenciadorTratamento> createState() => _GerenciadorTratamentoState();
 }
+
 
 class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
     with SingleTickerProviderStateMixin {
@@ -35,13 +42,15 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
   final _nameMedicamentoCtrl = TextEditingController();
   final _frequenciaCtrl = TextEditingController(text: "8");
   final _qtdMedicamentoCtrl = TextEditingController(text: "1");
-  final _qtdMedicamentoTotalCtrl = TextEditingController();
+  final _qtdMedicamentoTotalCtrl = TextEditingController(text: "1");
   final _dataInicialCtrl = TextEditingController(
     text: DateFormat('dd/MM/yyyy').format(DateTime.now()),
   );
   final _dataFinalCtrl = TextEditingController();
   final _horaInicialCtrl = TextEditingController(
-    text: DateFormat('HH:mm').format(DateTime.now()),
+    text: DateFormat('HH:mm').format(
+      DateTime.now().add(const Duration(hours: 1)),
+    ),
   );
   final _nameDosagemCtrl = TextEditingController(text: "1");
   final _qtdMedicamentoEstoqueCtrl = TextEditingController();
@@ -125,7 +134,8 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
   /// NOVO: Refeições selecionadas no modo "Junto com Refeições"
   /// valores: 'cafe' | 'almoco' | 'jantar'
   List<String> _refeicoesSelecionadas = [];
-
+  String? id_medicamento;
+  bool _estoquePrefillDone = false;
   @override
   void initState() {
     super.initState();
@@ -144,18 +154,197 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
     _offsetAnimation = Tween<Offset>(
       begin: Offset.zero,
       end: const Offset(0, -0.2),
-    ).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
-    );
+    ).animate(CurvedAnimation(parent: _animationController, curve: Curves.easeInOut));
 
     Future.delayed(const Duration(seconds: 10), () {
       if (mounted) {
-        setState(() {
-          _showHint = false;
-        });
+        setState(() => _showHint = false);
         _animationController.stop();
       }
     });
+
+    // >>>>>>>>>> NOVO: carregar dados para edição
+    if (widget.idTratamento != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final prov = Provider.of<UsuarioProvider>(context, listen: false);
+        final t = prov.tratamentosMap[widget.idTratamento];
+        if (t != null) {
+          _preencherCamposParaEdicao(t);
+        }
+      });
+    }
+  }
+  Future<void> _prefillEstoqueSeDisponivel() async {
+    if (_estoquePrefillDone) return;
+
+    final prov = Provider.of<UsuarioProvider>(context, listen: false);
+    final String? userId = prov.userId;
+    final String? idMed = id_medicamento;
+
+    if (userId == null || userId.isEmpty || idMed == null || idMed.isEmpty) return;
+
+    // 1) Tenta do Provider
+    if (prov.estoqueMap.containsKey(idMed)) {
+      final raw = prov.estoqueMap[idMed];
+      if (raw is Map) {
+        _aplicarPrefillEstoque(Map<String, dynamic>.from(raw));
+        _estoquePrefillDone = true;
+        return;
+      }
+    }
+
+    // 2) Busca no Firestore
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('usuarios').doc(userId)
+          .collection('estoque').doc(idMed)
+          .get();
+
+      if (!mounted) return;
+      if (doc.exists) {
+        final data = (doc.data() ?? {}) as Map<String, dynamic>;
+        _aplicarPrefillEstoque(data);
+
+        // opcional: cache local
+        prov.estoqueMap[idMed] = data;
+        _estoquePrefillDone = true;
+      }
+    } catch (e) {
+      debugPrint('Falha ao carregar estoque: $e');
+    }
+  }
+
+  // === NOVO: aplica nos controllers sem sobrescrever se já houver texto ===
+  void _aplicarPrefillEstoque(Map<String, dynamic> e) {
+    // qtdAtual
+    final dynamic qtdAtualDyn = e['qtdAtual'];
+    final sQtdAtual = (qtdAtualDyn == null)
+        ? ''
+        : (qtdAtualDyn is num) ? qtdAtualDyn.toString() : qtdAtualDyn.toString();
+    if (_qtdMedicamentoEstoqueCtrl.text.isEmpty && sQtdAtual.isNotEmpty) {
+      _qtdMedicamentoEstoqueCtrl.text = sQtdAtual;
+    }
+
+    // qtdMinima
+    final dynamic qtdMinDyn = e['qtdMinima'];
+    final sQtdMin = (qtdMinDyn == null)
+        ? ''
+        : (qtdMinDyn is num) ? qtdMinDyn.toString() : qtdMinDyn.toString();
+    if (_qtdEstoqueMinimoCtrl.text.isEmpty && sQtdMin.isNotEmpty) {
+      _qtdEstoqueMinimoCtrl.text = sQtdMin;
+    }
+
+    // dataValidade: Timestamp | DateTime | String dd/MM/yyyy
+    final dv = e['dataValidade'];
+    DateTime? dt;
+    if (dv is Timestamp) {
+      dt = dv.toDate();
+    } else if (dv is DateTime) {
+      dt = dv;
+    } else if (dv is String && dv.trim().isNotEmpty) {
+      try {
+        dt = DateFormat('dd/MM/yyyy').parseStrict(dv.trim());
+      } catch (_) {}
+    }
+    if (dt != null && _dataValidadeCtrl.text.isEmpty) {
+      _dataValidadeCtrl.text = DateFormat('dd/MM/yyyy').format(dt);
+    }
+
+    if (mounted) setState(() {});
+  }
+  void _preencherCamposParaEdicao(Map<String, dynamic> t) {
+    // Nome / tipo
+    _nameMedicamentoCtrl.text = (t['nomeMedicamento'] ?? '').toString();
+    _selectedTipo = (t['tipoMedicamento'] ?? _selectedTipo) as String?;
+
+    // Concentracao: exemplo "10 mg" → valor + unidade
+    final conc = (t['concentracaoMedicamento'] ?? '').toString().trim();
+    final concMatch = RegExp(r'^([\d,.]+)\s*([^\d\s].*)$').firstMatch(conc);
+    if (concMatch != null) {
+      _nameDosagemCtrl.text = concMatch.group(1)!.replaceAll(',', '.');
+      final unidade = concMatch.group(2)!.trim();
+      if (_vectorUnidadesMedida.contains(unidade)) {
+        _selectedUnidadesMedida = unidade;
+      }
+    }
+
+    // Tipo de tratamento / frequência
+    _selectedTipoTratamento = (t['tipoTratamento'] ?? _selectedTipoTratamento) as String?;
+    _selectedTipoFrequencia = (t['tipoFrequencia'] ?? _selectedTipoFrequencia) as String?;
+
+    // Datas
+    final dtIni = t['dataInicio'];
+    final dtFim = t['dataTermino'];
+    DateTime? dIni, dFim;
+    if (dtIni != null && dtIni is Timestamp) dIni = dtIni.toDate();
+    if (dtFim != null && dtFim is Timestamp) dFim = dtFim.toDate();
+    if (dIni != null) {
+      _dataInicialCtrl.text = DateFormat('dd/MM/yyyy').format(dIni);
+    }
+    if (dFim != null) {
+      _dataFinalCtrl.text = DateFormat('dd/MM/yyyy').format(dFim);
+    }
+
+    // Hora inicial (heurística):
+    // - Horários fixos: pega o primeiro lembrete do mesmo dia e usa o "valor" HH:mm
+    // - Intervalos: usa o que estiver salvo anteriormente no campo "horaInicial" se você tiver salvo;
+    //   senão tenta inferir do primeiro lembrete.
+    String? horaInicialInferida;
+
+    final lembs = (t['lembretes'] is List) ? List<Map<String, dynamic>>.from(t['lembretes']) : <Map<String, dynamic>>[];
+    if (_selectedTipoFrequencia == 'Horários Fixos') {
+      final horas = lembs
+          .map((e) => (e['valor'] ?? '').toString())
+          .where((v) => RegExp(r'^\d{2}:\d{2}$').hasMatch(v))
+          .toList()
+        ..sort();
+      _horariosFixos = horas;
+      if (horas.isNotEmpty) horaInicialInferida = horas.first;
+    } else if (_selectedTipoFrequencia == 'Junto com Refeições') {
+      // coletar momentos: 'cafe', 'almoco', 'jantar'
+      final momentos = lembs.map((e) => (e['momento'] ?? '').toString()).toSet().toList();
+      _refeicoesSelecionadas = momentos.where((m) => m == 'cafe' || m == 'almoco' || m == 'jantar').toList();
+    } else if (_selectedTipoFrequencia == 'Intervalos Fixos') {
+      // Frequência em horas
+      final fH = (t['frequenciaHoras'] ?? t['frequencia'] ?? '').toString();
+      // aceitar "8" ou "8h"/"8 horas"
+      final m = RegExp(r'(\d{1,2})').firstMatch(fH);
+      if (m != null) _frequenciaCtrl.text = m.group(1)!;
+
+      // Tenta inferir hora inicial do primeiro lembrete
+      final hPrimeiro = lembs
+          .map((e) => (e['dataHoraAgendado']))
+          .whereType<Timestamp>()
+          .map((ts) => ts.toDate())
+          .toList()
+        ..sort();
+      if (hPrimeiro.isNotEmpty) {
+        horaInicialInferida = DateFormat('HH:mm').format(hPrimeiro.first);
+        // e garante dataInicial também
+        if (dIni == null) {
+          _dataInicialCtrl.text = DateFormat('dd/MM/yyyy').format(hPrimeiro.first);
+        }
+      }
+    }
+
+    if (horaInicialInferida != null && RegExp(r'^\d{2}:\d{2}$').hasMatch(horaInicialInferida)) {
+      _horaInicialCtrl.text = horaInicialInferida;
+    }
+
+    // Quantidades
+    _qtdMedicamentoCtrl.text = (t['qtdMedicamento'] ?? _qtdMedicamentoCtrl.text).toString();
+    _qtdMedicamentoTotalCtrl.text = (t['qtdMedicamentoTotal'] ?? _qtdMedicamentoTotalCtrl.text).toString();
+
+    // Observações
+    _observacaoCtrl.text = (t['observacoes'] ?? '').toString();
+
+    // Estoque (se você salva nesses campos)
+    _qtdMedicamentoEstoqueCtrl.text = (t['qtdMedicamentoEstoqueCtrl'] ?? '').toString();
+    _qtdEstoqueMinimoCtrl.text = (t['qtdEstoqueMinimoCtrl'] ?? _qtdEstoqueMinimoCtrl.text).toString();
+    final dataValStr = (t['dataValidadeCtrl'] ?? '').toString();
+    if (dataValStr.isNotEmpty) _dataValidadeCtrl.text = dataValStr;
+
+    setState(() {}); // reflete na UI
   }
 
   @override
@@ -185,6 +374,13 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       if (_currentIndex == 0) {
         final isValid = _formKeyIndexUm.currentState?.validate() ?? false;
         if (!isValid) return;
+        // === AQUI: depois de preencher o 1º card, geramos o id e buscamos estoque ===
+        id_medicamento = gerarIdMedicamento(
+          _nameMedicamentoCtrl.text,
+          '${_nameDosagemCtrl.text.trim()} ${_selectedUnidadesMedida!}',
+          _selectedTipo!,
+        );
+        _prefillEstoqueSeDisponivel();
       }
       if (_currentIndex == 1) {
         _calcularAgendamento();
@@ -290,8 +486,19 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       onTipoChanged: (value) => setState(() => _selectedTipo = value),
       onUnidadesMedidaChanged:
           (value) => setState(() => _selectedUnidadesMedida = value),
-      onTipoTratamentoChanged:
-          (value) => setState(() => _selectedTipoTratamento = value),
+      onTipoTratamentoChanged: (value) {
+        setState(() {
+          _selectedTipoTratamento = value;
+
+          // Se virar "Dose única" e estava em "Intervalos Fixos", escolhe um aceitável
+          if (value == 'Tratamento Dose única' &&
+              _selectedTipoFrequencia == 'Intervalos Fixos') {
+            // defina o default que você preferir:
+            _selectedTipoFrequencia = 'Horários Fixos';
+            // ou: _selectedTipoFrequencia = 'Junto com Refeições';
+          }
+        });
+      },
       onTipoFrequenciaChanged:
           (value) => setState(() => _selectedTipoFrequencia = value),
     );
@@ -308,6 +515,7 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       dataFinalCtrl: _dataFinalCtrl,
       selectedUnidadesMedidaLembrete: _selectedUnidadesMedidaLembrete,
       vectorUnidadesMedidaLembrete: _vectorUnidadesMedidaLembrete,
+      selectedTipoTratamento: _selectedTipoTratamento ?? "",
       onSelectedUnidadesMedidaLembreteChanged: (value) {
         setState(() {
           _selectedUnidadesMedidaLembrete = value;
@@ -346,7 +554,18 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       onCompartilharTratamentoChanged:
           (val) => setState(() => _selectedCompartilharTratamento = val),
       onPressedSalvar:  () => _salvarTratamento(usuarioProvider),
+
     );
+  }
+  String gerarIdMedicamento(String nome, String conc, String tipo) {
+    final normalized = [nome, conc, tipo]
+        .map((s) => removeDiacritics(s)
+        .toLowerCase()
+        .trim()
+        .replaceAll(RegExp(r'\s+'), ' '))
+        .join('|');
+
+    return normalized.toString();
   }
 
   // ===== Helpers compartilhados por "Horários Fixos" e "Refeições" =====
@@ -699,17 +918,16 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
 
     if (!isValid1 || !isValid2 || !isValid3) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Preencha todos os campos obrigatórios')),
+        const SnackBar(content: Text('Preencha todos os campos obrigatórios')),
       );
       return;
     }
-
 
     final controller = SalvarTratamento(
       usuarioProvider: usuarioProvider,
       nomeMedicamento: _nameMedicamentoCtrl.text,
       tipoMedicamento: _selectedTipo ?? "",
-      concentracaoMedicamento: _nameDosagemCtrl.text.trim() + " " + _selectedUnidadesMedida!,
+      concentracaoMedicamento: '${_nameDosagemCtrl.text.trim()} ${_selectedUnidadesMedida!}',
       qtdMedicamento: _qtdMedicamentoCtrl.text.trim(),
       qtdMedicamentoTotal: _qtdMedicamentoTotalCtrl.text.trim(),
       tipoTratamento: _selectedTipoTratamento,
@@ -717,25 +935,32 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       horariosFixos: _horariosFixos,
       dataInicial: _dataInicialCtrl.text.trim(),
       horaInicial: _horaInicialCtrl.text.trim(),
-      idCuidador: "_idCuidador", // pega do seu estado/variável
+      idCuidador: "_idCuidador",
       observacoes: _observacaoCtrl.text.trim(),
       qtdMedicamentoEstoqueCtrl: _qtdMedicamentoEstoqueCtrl.text.trim(),
       qtdEstoqueMinimoCtrl: _qtdEstoqueMinimoCtrl.text.trim(),
       dataValidadeCtrl: _dataValidadeCtrl.text.trim(),
       unidadeMedida: _selectedUnidadesMedidaLembrete ?? "",
-      tipoFrequencia:  _selectedTipoFrequencia ?? "",
+      tipoFrequencia: _selectedTipoFrequencia ?? "",
       refeicoesSelecionadas: _refeicoesSelecionadas,
+      isContinuo: _selectedTipoTratamento == 'Tratamento Contínuo',
+      janelaPreGeracaoDias: 15,
     );
 
     try {
-      await controller.criarTratamentoComLembretes();
+      if (widget.idTratamento == null) {
+        await controller.criarTratamentoComLembretes();
+      } else {
+        await controller.atualizarTratamento(idTratamento: widget.idTratamento!);
+      }
       widget.onConcluir();
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Erro ao salvar tratamento')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Erro ao salvar tratamento')),
+      );
     }
   }
+
 
   DateTime _calcularDataFinal(
       DateTime dataInicial,

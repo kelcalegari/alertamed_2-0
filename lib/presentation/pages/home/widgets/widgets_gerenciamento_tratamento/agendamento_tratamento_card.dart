@@ -17,6 +17,7 @@ class AgendamentoTratamento extends StatefulWidget {
 
   // NOVO: decide qual layout mostrar
   final String selectedTipoFrequencia;
+  final String selectedTipoTratamento;
 
   // OPCIONAL: expõe os horários fixos como strings "HH:mm"
   final void Function(List<String> horariosFixos)? onHorariosFixosChanged;
@@ -37,6 +38,7 @@ class AgendamentoTratamento extends StatefulWidget {
 
     this.onHorariosFixosChanged,
     this.onRefeicoesChanged,
+    required this.selectedTipoTratamento,
   });
 
   @override
@@ -104,10 +106,19 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
 
   // ---------------- Refeições ----------------
   void _toggleRefeicao(String key) {
-    if (_refeicoesSelecionadas.contains(key)) {
-      _refeicoesSelecionadas.remove(key);
+    final isDoseUnica =
+        widget.selectedTipoTratamento == 'Tratamento Dose única';
+    if (isDoseUnica) {
+      // permite somente 1 selecionada
+      _refeicoesSelecionadas
+        ..clear()
+        ..add(key);
     } else {
-      _refeicoesSelecionadas.add(key);
+      if (_refeicoesSelecionadas.contains(key)) {
+        _refeicoesSelecionadas.remove(key);
+      } else {
+        _refeicoesSelecionadas.add(key);
+      }
     }
     setState(() {});
     _emitRefeicoesSelecionadas();
@@ -123,6 +134,7 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
     if (_refeicoesSelecionadas.isEmpty) {
       return "Selecione ao menos uma refeição";
     }
+    // se dose única, garantir 1 só (já garantido no toggle)
     return null;
   }
 
@@ -130,6 +142,12 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
   Widget build(BuildContext context) {
     final isFixos = widget.selectedTipoFrequencia == 'Horários Fixos';
     final isRefeicao = widget.selectedTipoFrequencia == 'Junto com Refeições';
+
+    final isDeterminado =
+        widget.selectedTipoTratamento == 'Tratamento Determinado';
+    final isContinuo = widget.selectedTipoTratamento == 'Tratamento Contínuo';
+    final isDoseUnica =
+        widget.selectedTipoTratamento == 'Tratamento Dose única';
     return Form(
       key: widget.formKeyIndexDois,
       child: Padding(
@@ -153,114 +171,120 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
 
             // ===================== MODO INTERVALOS FIXOS =====================
             if (!isFixos && !isRefeicao) ...[
-              Row(
-                children: [
-                  Flexible(
-                    flex: 4,
-                    child: CustomTextField(
-                      ctrl: widget.frequenciaCtrl,
-                      label: "A cada",
-                      hint: "8",
-                      pad: 0,
-                      textInputType: TextInputType.number,
-                      icon: Icons.access_time,
-                      validador:
-                          (v) =>
-                              !isFixos
-                                  ? (v == null || v.trim().isEmpty
-                                      ? "Informe a frequência"
-                                      : null)
-                                  : null,
+              // Linha com "A cada" (Frequência) ➜ só Determinado/Contínuo
+              if (!isDoseUnica)
+                Row(
+                  children: [
+                    Flexible(
+                      flex: 4,
+                      child: CustomTextField(
+                        ctrl: widget.frequenciaCtrl,
+                        label: "A cada",
+                        hint: "8",
+                        pad: 0,
+                        textInputType: TextInputType.number,
+                        icon: Icons.access_time,
+                        validador:
+                            (v) =>
+                                (isDeterminado || isContinuo)
+                                    ? (v == null || v.trim().isEmpty
+                                        ? "Informe a frequência"
+                                        : null)
+                                    : null,
+                      ),
                     ),
-                  ),
-                  Flexible(
-                    flex: 3,
-                    child: CustomTextField(
-                      pad: 0,
-                      ctrl: widget.qtdMedicamentoCtrl,
-                      label: "Quantidade",
-                      textInputType: TextInputType.number,
-                      hint: "1",
-                      validador:
-                          (v) =>
-                              !isFixos
-                                  ? (v == null || v.trim().isEmpty
-                                      ? "Informe a quantidade"
-                                      : null)
-                                  : null,
+                    // Qtd por dose
+                    Flexible(
+                      flex: 3,
+                      child: CustomTextField(
+                        pad: 0,
+                        ctrl: widget.qtdMedicamentoCtrl,
+                        label: "Qtd por dose",
+                        textInputType: TextInputType.number,
+                        hint: "1",
+                        validador:
+                            (v) =>
+                                (v == null || v.trim().isEmpty)
+                                    ? "Informe a quantidade"
+                                    : null,
+                      ),
                     ),
-                  ),
-                  Flexible(
-                    flex: 4,
-                    child: CustomSelectorField<String>(
-                      selectedValue: widget.selectedUnidadesMedidaLembrete,
-                      items:
-                          widget.vectorUnidadesMedidaLembrete
-                              .map(
-                                (g) =>
-                                    DropdownMenuItem(value: g, child: Text(g)),
-                              )
-                              .toList(),
-                      onChanged: widget.onSelectedUnidadesMedidaLembreteChanged,
-                      hint: widget.vectorUnidadesMedidaLembrete[0],
-                      pad: 0,
-                      validador:
-                          (v) =>
-                              !isFixos
-                                  ? (v == null
-                                      ? "Informe a Unidade de Medida"
-                                      : null)
-                                  : null,
+                    // Unidade
+                    Flexible(
+                      flex: 4,
+                      child: CustomSelectorField<String>(
+                        selectedValue: widget.selectedUnidadesMedidaLembrete,
+                        items:
+                            widget.vectorUnidadesMedidaLembrete
+                                .map(
+                                  (g) => DropdownMenuItem(
+                                    value: g,
+                                    child: Text(g),
+                                  ),
+                                )
+                                .toList(),
+                        onChanged:
+                            widget.onSelectedUnidadesMedidaLembreteChanged,
+                        hint: widget.vectorUnidadesMedidaLembrete[0],
+                        pad: 0,
+                        validador:
+                            (v) =>
+                                v == null
+                                    ? "Informe a Unidade de Medida"
+                                    : null,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Flexible(
-                    flex: 5,
-                    child: CustomTextField(
-                      pad: 0,
-                      ctrl: widget.qtdMedicamentoTotalCtrl,
-                      label: "Quantidade Total",
-                      textInputType: TextInputType.number,
-                      hint: "1",
-                      validador:
-                          (v) =>
-                              !isFixos
-                                  ? (v == null || v.trim().isEmpty
-                                      ? "Informe a quantidade total"
-                                      : null)
-                                  : null,
+                  ],
+                ),
+
+              // Quantidade Total + Unidade ➜ só Determinado
+              if (isDeterminado) ...[
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Flexible(
+                      flex: 5,
+                      child: CustomTextField(
+                        pad: 0,
+                        ctrl: widget.qtdMedicamentoTotalCtrl,
+                        label: "Quantidade Total",
+                        textInputType: TextInputType.number,
+                        hint: "1",
+                        validador:
+                            (v) =>
+                                v == null || v.trim().isEmpty
+                                    ? "Informe a quantidade total"
+                                    : null,
+                      ),
                     ),
-                  ),
-                  Flexible(
-                    flex: 3,
-                    child: CustomSelectorField<String>(
-                      selectedValue: widget.selectedUnidadesMedidaLembrete,
-                      items:
-                          widget.vectorUnidadesMedidaLembrete
-                              .map(
-                                (g) =>
-                                    DropdownMenuItem(value: g, child: Text(g)),
-                              )
-                              .toList(),
-                      onChanged: widget.onSelectedUnidadesMedidaLembreteChanged,
-                      hint: widget.vectorUnidadesMedidaLembrete[0],
-                      pad: 0,
-                      validador:
-                          (v) =>
-                              !isFixos
-                                  ? (v == null
-                                      ? "Informe a Unidade de Medida"
-                                      : null)
-                                  : null,
+                    Flexible(
+                      flex: 3,
+                      child: CustomSelectorField<String>(
+                        selectedValue: widget.selectedUnidadesMedidaLembrete,
+                        items:
+                            widget.vectorUnidadesMedidaLembrete
+                                .map(
+                                  (g) => DropdownMenuItem(
+                                    value: g,
+                                    child: Text(g),
+                                  ),
+                                )
+                                .toList(),
+                        onChanged:
+                            widget.onSelectedUnidadesMedidaLembreteChanged,
+                        hint: widget.vectorUnidadesMedidaLembrete[0],
+                        pad: 0,
+                        validador:
+                            (v) =>
+                                v == null
+                                    ? "Informe a Unidade de Medida"
+                                    : null,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
+                  ],
+                ),
+              ],
+              if (!isDoseUnica)
               const Text(
                 "Inicio",
                 style: TextStyle(
@@ -329,161 +353,226 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                       textInputType: TextInputType.datetime,
                       validador:
                           (v) =>
-                              !isFixos
-                                  ? (v == null || v.trim().isEmpty
-                                      ? "Informe a data da primeira dose"
-                                      : null)
-                                  : null,
+                      !isFixos
+                          ? (v == null || v.trim().isEmpty
+                          ? "Informe a data da primeira dose"
+                          : null)
+                          : null,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
-              const Text(
-                "Termino",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: AppColors.textVerde,
+
+              /// Término ➜ só Determinado
+              if (isDeterminado)...[
+                const Text(
+                  "Fim",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: AppColors.textVerde,
+                  ),
                 ),
-              ),
-              CustomTextField(
-                ctrl: widget.dataFinalCtrl,
-                label: "Data",
-                hint: "25/05/2025",
-                pad: 0,
-                textInputType: TextInputType.text,
-                validador:
-                    (v) =>
-                        !isFixos
-                            ? (v == null || v.trim().isEmpty
-                                ? "Informe a data do fim do tratamento"
-                                : null)
-                            : null,
-              ),
+                CustomTextField(
+                  ctrl: widget.dataFinalCtrl,
+                  label: "Data",
+                  hint: "25/06/2025",
+                  pad: 0,
+                  textInputType: TextInputType.text,
+                  validador:
+                      (v) =>
+                          (v == null || v.trim().isEmpty)
+                              ? "Informe a data do fim"
+                              : null,
+                ),]
             ],
 
             // ===================== MODO HORÁRIOS FIXOS =====================
             if (isFixos) ...[
-              Row(
-                children: [
-                  Flexible(
-                    flex: 3,
-                    child: CustomTextField(
-                      pad: 0,
-                      ctrl: _qtdDosesDiaCtrl,
-                      label: "Doses por dia",
-                      textInputType: TextInputType.number,
-                      hint: "3",
-                      validador:
-                          (v) =>
-                              isFixos
-                                  ? (v == null || v.trim().isEmpty
-                                      ? "Informe a quantidade de doses"
-                                      : null)
-                                  : null,
-                      onComplete: () {
-                        final qtd =
-                            int.tryParse(_qtdDosesDiaCtrl.text.trim()) ?? 1;
-                        _sincronizarQtdDoses(qtd);
-                      },
+              if (!isDoseUnica)
+                Row(
+                  children: [
+                    Flexible(
+                      flex: 3,
+                      child: CustomTextField(
+                        pad: 0,
+                        ctrl: _qtdDosesDiaCtrl,
+                        label: "Doses por dia",
+                        textInputType: TextInputType.number,
+                        hint: "3",
+                        validador:
+                            (v) =>
+                                isFixos
+                                    ? (v == null || v.trim().isEmpty
+                                        ? "Informe a quantidade de doses"
+                                        : null)
+                                    : null,
+                        onComplete: () {
+                          final qtd =
+                              int.tryParse(_qtdDosesDiaCtrl.text.trim()) ?? 1;
+                          _sincronizarQtdDoses(qtd);
+                        },
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    flex: 3,
-                    child: CustomTextField(
-                      pad: 0,
-                      ctrl: widget.qtdMedicamentoCtrl,
-                      label: "Qtd por dose",
-                      textInputType: TextInputType.number,
-                      hint: "1",
-                      validador:
-                          (v) =>
-                              isFixos
-                                  ? (v == null || v.trim().isEmpty
-                                      ? "Informe a quantidade por dose"
-                                      : null)
-                                  : null,
+                    const SizedBox(width: 8),
+                    // Qtd por dose + Unidade ➜ sempre (inclusive dose única)
+                    Flexible(
+                      flex: 3,
+                      child: CustomTextField(
+                        pad: 0,
+                        ctrl: widget.qtdMedicamentoCtrl,
+                        label: "Qtd por dose",
+                        textInputType: TextInputType.number,
+                        hint: "1",
+                        validador:
+                            (v) =>
+                                (v == null || v.trim().isEmpty)
+                                    ? "Informe a quantidade por dose"
+                                    : null,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    flex: 4,
-                    child: CustomSelectorField<String>(
-                      selectedValue: widget.selectedUnidadesMedidaLembrete,
-                      items:
-                          widget.vectorUnidadesMedidaLembrete
-                              .map(
-                                (g) =>
-                                    DropdownMenuItem(value: g, child: Text(g)),
-                              )
-                              .toList(),
-                      onChanged: widget.onSelectedUnidadesMedidaLembreteChanged,
-                      hint: widget.vectorUnidadesMedidaLembrete[0],
-                      pad: 0,
-                      validador:
-                          (v) =>
-                              isFixos
-                                  ? (v == null
-                                      ? "Informe a Unidade de Medida"
-                                      : null)
-                                  : null,
+                    const SizedBox(width: 8),
+                    Flexible(
+                      flex: 4,
+                      child: CustomSelectorField<String>(
+                        selectedValue: widget.selectedUnidadesMedidaLembrete,
+                        items:
+                            widget.vectorUnidadesMedidaLembrete
+                                .map(
+                                  (g) => DropdownMenuItem(
+                                    value: g,
+                                    child: Text(g),
+                                  ),
+                                )
+                                .toList(),
+                        onChanged:
+                            widget.onSelectedUnidadesMedidaLembreteChanged,
+                        hint: widget.vectorUnidadesMedidaLembrete[0],
+                        pad: 0,
+                        validador:
+                            (v) =>
+                                v == null
+                                    ? "Informe a Unidade de Medida"
+                                    : null,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // Lista dinâmica de horários
-              const Text(
-                "Horários das doses",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: AppColors.textVerde,
+                  ],
                 ),
-              ),
-              const SizedBox(height: 8),
-              ...List.generate(_horariosCtrls.length, (i) {
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: i == _horariosCtrls.length - 1 ? 0 : 8,
+              if (!isDoseUnica) ...[
+                const SizedBox(height: 16),
+
+                // Lista dinâmica de horários
+                const Text(
+                  "Horários das doses",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: AppColors.textVerde,
                   ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: CustomTextField(
-                          ctrl: _horariosCtrls[i],
-                          label: "Dose ${i + 1}",
-                          hint: "08:00",
-                          pad: 0,
-                          isTime: true,
-                          textInputType: TextInputType.text,
-                          icon: Icons.access_time,
-                          validador: (_) => _validaTodosHorariosPreenchidos(),
-                          onComplete: _emitHorariosFixos,
+                ),
+                const SizedBox(height: 8),
+                ...List.generate(_horariosCtrls.length, (i) {
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: i == _horariosCtrls.length - 1 ? 0 : 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: CustomTextField(
+                            ctrl: _horariosCtrls[i],
+                            label: "Dose ${i + 1}",
+                            hint: "08:00",
+                            pad: 0,
+                            isTime: true,
+                            textInputType: TextInputType.text,
+                            icon: Icons.access_time,
+                            validador: (_) => _validaTodosHorariosPreenchidos(),
+                            onComplete: _emitHorariosFixos,
+                          ),
                         ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: 'Remover horário',
+                          onPressed:
+                              _horariosCtrls.length > 1
+                                  ? () {
+                                    _horariosCtrls.removeAt(i).dispose();
+                                    _qtdDosesDiaCtrl.text =
+                                        _horariosCtrls.length.toString();
+                                    setState(() {});
+                                    _emitHorariosFixos();
+                                  }
+                                  : null,
+                          icon: const Icon(Icons.delete_outline),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+              // ➜ Para DOSE ÚNICA em Fixos: um único horário (usa horaInicialCtrl)
+              if (isDoseUnica) ...[
+                Row(
+                  children: [
+                    Flexible(
+                      flex: 3,
+                      child: CustomTextField(
+                        pad: 0,
+                        ctrl: widget.qtdMedicamentoCtrl,
+                        label: "Quantidade por dose",
+                        textInputType: TextInputType.number,
+                        hint: "1",
+                        validador:
+                            (v) =>
+                        (v == null || v.trim().isEmpty)
+                            ? "Informe a quantidade"
+                            : null,
                       ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        tooltip: 'Remover horário',
-                        onPressed:
-                            _horariosCtrls.length > 1
-                                ? () {
-                                  _horariosCtrls.removeAt(i).dispose();
-                                  _qtdDosesDiaCtrl.text =
-                                      _horariosCtrls.length.toString();
-                                  setState(() {});
-                                  _emitHorariosFixos();
-                                }
-                                : null,
-                        icon: const Icon(Icons.delete_outline),
+                    ),
+                    // Unidade
+                    Flexible(
+                      flex: 4,
+                      child: CustomSelectorField<String>(
+                        selectedValue: widget.selectedUnidadesMedidaLembrete,
+                        items:
+                        widget.vectorUnidadesMedidaLembrete
+                            .map(
+                              (g) => DropdownMenuItem(
+                            value: g,
+                            child: Text(g),
+                          ),
+                        )
+                            .toList(),
+                        onChanged:
+                        widget.onSelectedUnidadesMedidaLembreteChanged,
+                        hint: widget.vectorUnidadesMedidaLembrete[0],
+                        pad: 0,
+                        validador:
+                            (v) =>
+                        v == null
+                            ? "Informe a Unidade de Medida"
+                            : null,
                       ),
-                    ],
-                  ),
-                );
-              }),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                CustomTextField(
+                  ctrl: widget.horaInicialCtrl,
+                  label: "Hora da dose",
+                  hint: "08:00",
+                  pad: 0,
+                  isTime: true,
+                  textInputType: TextInputType.text,
+                  icon: Icons.access_time,
+                  validador:
+                      (v) =>
+                          (v == null || v.trim().isEmpty)
+                              ? "Informe a hora"
+                              : null,
+                ),
+              ],
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -530,40 +619,40 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Flexible(
-                    child: CustomTextField(
-                      ctrl: widget.dataFinalCtrl,
-                      label: "Data final",
-                      hint: "25/06/2025",
-                      pad: 0,
-                      textInputType: TextInputType.datetime,
-                      validador:
-                          (v) =>
-                              v == null || v.trim().isEmpty
-                                  ? "Informe a data final"
-                                  : null,
+                  if (isDeterminado)
+                    Flexible(
+                      child: CustomTextField(
+                        ctrl: widget.dataFinalCtrl,
+                        label: "Data final",
+                        hint: "25/06/2025",
+                        pad: 0,
+                        textInputType: TextInputType.datetime,
+                        validador:
+                            (v) =>
+                                (v == null || v.trim().isEmpty)
+                                    ? "Informe a data final"
+                                    : null,
+                      ),
                     ),
-                  ),
                 ],
               ),
               const SizedBox(height: 12),
 
-              // (Opcional) total de medicamento para o período
-              CustomTextField(
-                pad: 0,
-                ctrl: widget.qtdMedicamentoTotalCtrl,
-                label: "Quantidade Total (período)",
-                textInputType: TextInputType.number,
-                hint: "30",
-                validador:
-                    (v) =>
-                        isFixos
-                            ? (v == null || v.trim().isEmpty
-                                ? "Informe a quantidade total para o período"
-                                : null)
-                            : null,
-              ),
-            ],if (isRefeicao) ...[
+              if (isDeterminado)
+                CustomTextField(
+                  pad: 0,
+                  ctrl: widget.qtdMedicamentoTotalCtrl,
+                  label: "Quantidade Total (período)",
+                  textInputType: TextInputType.number,
+                  hint: "30",
+                  validador:
+                      (v) =>
+                          (v == null || v.trim().isEmpty)
+                              ? "Informe a quantidade total para o período"
+                              : null,
+                ),
+            ],
+            if (isRefeicao) ...[
               Row(
                 children: [
                   Flexible(
@@ -574,11 +663,13 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                       label: "Qtd por dose",
                       textInputType: TextInputType.number,
                       hint: "1",
-                      validador: (v) => isRefeicao
-                          ? (v == null || v.trim().isEmpty
-                          ? "Informe a quantidade por dose"
-                          : null)
-                          : null,
+                      validador:
+                          (v) =>
+                              isRefeicao
+                                  ? (v == null || v.trim().isEmpty
+                                      ? "Informe a quantidade por dose"
+                                      : null)
+                                  : null,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -586,15 +677,23 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                     flex: 4,
                     child: CustomSelectorField<String>(
                       selectedValue: widget.selectedUnidadesMedidaLembrete,
-                      items: widget.vectorUnidadesMedidaLembrete
-                          .map((g) => DropdownMenuItem(value: g, child: Text(g)))
-                          .toList(),
+                      items:
+                          widget.vectorUnidadesMedidaLembrete
+                              .map(
+                                (g) =>
+                                    DropdownMenuItem(value: g, child: Text(g)),
+                              )
+                              .toList(),
                       onChanged: widget.onSelectedUnidadesMedidaLembreteChanged,
                       hint: widget.vectorUnidadesMedidaLembrete[0],
                       pad: 0,
-                      validador: (v) => isRefeicao
-                          ? (v == null ? "Informe a Unidade de Medida" : null)
-                          : null,
+                      validador:
+                          (v) =>
+                              isRefeicao
+                                  ? (v == null
+                                      ? "Informe a Unidade de Medida"
+                                      : null)
+                                  : null,
                     ),
                   ),
                 ],
@@ -641,16 +740,16 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                   return err == null
                       ? const SizedBox.shrink()
                       : Padding(
-                    padding: const EdgeInsets.only(top: 8.0),
-                    child: Text(
-                      err,
-                      style: const TextStyle(
-                        color: Colors.red,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  );
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          err,
+                          style: const TextStyle(
+                            color: Colors.red,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      );
                 },
               ),
 
@@ -674,41 +773,47 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                       hint: "25/05/2025",
                       pad: 0,
                       textInputType: TextInputType.datetime,
-                      validador: (v) => isRefeicao
-                          ? (v == null || v.trim().isEmpty
-                          ? "Informe a data inicial"
-                          : null)
-                          : null,
+                      validador:
+                          (v) =>
+                              isRefeicao
+                                  ? (v == null || v.trim().isEmpty
+                                      ? "Informe a data inicial"
+                                      : null)
+                                  : null,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: CustomTextField(
-                      ctrl: widget.dataFinalCtrl,
-                      label: "Data final",
-                      hint: "25/06/2025",
-                      pad: 0,
-                      textInputType: TextInputType.datetime,
-                      validador: (v) =>
-                      v == null || v.trim().isEmpty ? "Informe a data final" : null,
+                  if (isDeterminado) ...[
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: CustomTextField(
+                        ctrl: widget.dataFinalCtrl,
+                        label: "Data final",
+                        hint: "25/06/2025",
+                        pad: 0,
+                        textInputType: TextInputType.datetime,
+                        validador:
+                            (v) =>
+                                v == null || v.trim().isEmpty
+                                    ? "Informe a data final"
+                                    : null,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
               const SizedBox(height: 12),
 
-              CustomTextField(
-                pad: 0,
-                ctrl: widget.qtdMedicamentoTotalCtrl,
-                label: "Quantidade Total (período)",
-                textInputType: TextInputType.number,
-                hint: "30",
-                validador: (v) => isRefeicao
-                    ? (v == null || v.trim().isEmpty
-                    ? "Informe a quantidade total para o período"
-                    : null)
-                    : null,
-              ),
+              if (isDeterminado)
+                CustomTextField(
+                  pad: 0,
+                  ctrl: widget.qtdMedicamentoTotalCtrl,
+                  label: "Quantidade Total (período)",
+                  textInputType: TextInputType.number,
+                  hint: "30",
+                  validador: (v) => (v == null || v.trim().isEmpty)
+                      ? "Informe a quantidade total para o período"
+                      : null,
+                ),
             ],
           ],
         ),
