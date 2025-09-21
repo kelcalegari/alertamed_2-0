@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-
+import 'package:provider/provider.dart';
+import '../../../../../providers/user_data_provider.dart';
 import '../../../../routes/routes.dart';
 import '../../../../shared/modals/custom_popup.dart';
 import '../login_texts.dart';
@@ -23,6 +24,8 @@ class LoginService {
         email: emailController.text.trim(),
         password: passwordController.text,
       );
+      context.read<UsuarioProvider>().fetchData();
+
       Navigator.pushReplacementNamed(context, Routes.home);
     } on FirebaseAuthException catch (e) {
       String errorMsg;

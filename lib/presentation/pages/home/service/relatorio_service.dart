@@ -2,16 +2,21 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_saver/file_saver.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_file_dialog/flutter_file_dialog.dart';
-// PDF
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+
+// Opcional: só para reconhecer Timestamp se os mapas do Provider vierem do Firestore
+import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
+
+import '../../../../providers/user_data_provider.dart';
+
+
 
 class ReportResult {
   final String pdfPath;
@@ -40,10 +45,10 @@ class ReportResult {
 class TimelineEvent {
   final DateTime quandoLocal;      // horário em localtime
   final String tipo;               // 'lembrete_tomado' | 'lembrete_adiado' | 'lembrete_cancelado' | 'sintoma' | 'lembrete'
-  final String titulo;             // ex.: Nome do medicamento / Nome do sintoma
+  final String titulo;             // ex.: nome do medicamento / sintoma
   final String detalhe;            // ex.: dosagem + observação
   final String? nomeTratamento;    // ex.: "Paracetamol 500mg"
-  final String? statusLembrete;    // 'tomado'|'adiado'|'cancelado' (para lembretes)
+  final String? statusLembrete;    // 'tomado'|'adiado'|'cancelado'
   final DateTime? agendadoLocal;   // quando aplicável
   final DateTime? tomadoLocal;     // quando aplicável
   final int? atrasoMin;            // quando aplicável
@@ -62,20 +67,17 @@ class TimelineEvent {
 }
 
 class RelatorioService {
-  final _firestore = FirebaseFirestore.instance;
   final _dfDate = DateFormat('dd/MM/yyyy');
   final _dfDateTime = DateFormat('dd/MM/yyyy HH:mm');
 
   // =======================================================================
-  // PÚBLICOS
+  // NOVO: Gera usando SOMENTE os dados do UsuarioProvider (contexto atual)
   // =======================================================================
-
-  /// Gera PDF/CSV(s) conforme flags e retorna os caminhos temporários.
   Future<ReportResult> gerarTimelineEResumo({
-    required String idUsuario,
-    required String nomeUsuario,
+    required UsuarioProvider userProv,
     required DateTime inicio,
     required DateTime fim,
+    String? nomeUsuario,
     bool anonimizar = false,
 
     // O que gerar
@@ -83,82 +85,92 @@ class RelatorioService {
     bool makeCsvTimeline = true,
     bool makeCsvResumo = true,
   }) async {
-    // Normaliza para consultas
-    final start = inicio.toUtc();
-    final end = fim.toUtc();
+    // Pega o contexto do provider (paciente atual)
+    final String ctxUid = userProv.contextoUsuarioId;
 
-    // 1) Carrega TRATAMENTOS ATIVOS
-    final tratamentosSnap = await _firestore
-        .collection('usuarios').doc(idUsuario)
-        .collection('tratamentos')
-        .where('status', isEqualTo: 'ativo')
-        .get();
+    // Nome do usuário para o relatório
+    final nomeCtx = nomeUsuario ??
+        (userProv.isContextoSouEu
+            ? (userProv.dadosUsuario['nome']?.toString().trim().isNotEmpty == true
+            ? userProv.dadosUsuario['nome'].toString()
+            : 'Você')
+            : 'Paciente');
 
-    // Mapa rápido para enriquecer lembretes
-    final Map<String, Map<String, dynamic>> tratMapById = {};
-    for (final d in tratamentosSnap.docs) {
-      final data = d.data();
-      data['idTratamento'] = d.id;
-      tratMapById[d.id] = data;
-    }
+    // Converte limites para UTC somente para comparação consistente
+    final startUtc = inicio.toUtc();
+    final endUtc = fim.toUtc();
 
-    // 2) Carrega LEMBRETES (período)
-    final lembretesQuery = _firestore
-        .collection('usuarios').doc(idUsuario)
-        .collection('lembretes')
-        .where('dataHoraAgendado', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
-        .where('dataHoraAgendado', isLessThanOrEqualTo: Timestamp.fromDate(end))
-        .orderBy('dataHoraAgendado');
+    // ---------- TRATAMENTOS ATIVOS ----------
+    // No provider, tratamentosMap = { idTratamento: Map }
+    final List<Map<String, dynamic>> tratamentosAtivos =
+    userProv.tratamentosMap.values
+        .where((m) => (m['status'] ?? '') == 'ativo')
+        .map((m) => Map<String, dynamic>.from(m))
+        .toList();
 
-    final lembretesSnap = await lembretesQuery.get();
+    // Mapa rápido por idTratamento
+    final Map<String, Map<String, dynamic>> tratMapById = {
+      for (final entry in userProv.tratamentosMap.entries)
+        entry.key: Map<String, dynamic>.from(entry.value),
+    };
 
-    // 3) Carrega SINTOMAS (período)
-    final sintomasSnap = await _firestore
-        .collection('usuarios').doc(idUsuario)
-        .collection('sintomas')
-        .where('dataHora', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
-        .where('dataHora', isLessThanOrEqualTo: Timestamp.fromDate(end))
-        .orderBy('dataHora')
-        .get();
+    // ---------- LEMBRETES (filtra por período do agendado) ----------
+    final List<Map<String, dynamic>> lembretesPeriodo = userProv.lembretes.where((mRaw) {
+      final m = Map<String, dynamic>.from(mRaw);
+      final DateTime? ag = _toDate(m['dataHoraAgendado'])?.toUtc();
+      if (ag == null) return false;
+      return (ag.isAtSameMomentAs(startUtc) || ag.isAfter(startUtc)) &&
+          (ag.isAtSameMomentAs(endUtc)   || ag.isBefore(endUtc));
+    }).toList();
 
-    // 4) Monta TIMELINE
+    // ---------- SINTOMAS (filtra por período) ----------
+    final List<Map<String, dynamic>> sintomasPeriodo = userProv.sintomas.where((mRaw) {
+      final m = Map<String, dynamic>.from(mRaw);
+      final DateTime? dh = _toDate(m['dataHora'])?.toUtc();
+      if (dh == null) return false;
+      return (dh.isAtSameMomentAs(startUtc) || dh.isAfter(startUtc)) &&
+          (dh.isAtSameMomentAs(endUtc)   || dh.isBefore(endUtc));
+    }).toList();
+
+    // ---------- MONTA TIMELINE ----------
     final timeline = <TimelineEvent>[];
 
     // Lembretes
-    for (final d in lembretesSnap.docs) {
-      final m = d.data();
+    for (final mRaw in lembretesPeriodo) {
+      final m = Map<String, dynamic>.from(mRaw);
 
-      final DateTime agendado = (m['dataHoraAgendado'] as Timestamp).toDate().toLocal();
-      final DateTime? tomado = (m['dataHoraTomado'] as Timestamp?)?.toDate().toLocal();
-      final bool tomadoB = (m['tomado'] ?? false) as bool;
-      final bool adiadoB = (m['adiado'] ?? false) as bool;
-      final bool canceladoB = (m['cancelado'] ?? false) as bool;
+      final DateTime? agendado = _toDate(m['dataHoraAgendado'])?.toLocal();
+      final DateTime? tomado = _toDate(m['dataHoraTomado'])?.toLocal();
+
+      final bool tomadoB    = (m['tomado'] ?? false) == true;
+      final bool adiadoB    = (m['adiado'] ?? false) == true;
+      final bool canceladoB = (m['cancelado'] ?? false) == true;
 
       String status = '';
-      if (canceladoB) status = 'cancelado';
-      else if (adiadoB) status = 'adiado';
-      else if (tomadoB) status = 'tomado';
+      if (canceladoB)      status = 'cancelado';
+      else if (adiadoB)    status = 'adiado';
+      else if (tomadoB)    status = 'tomado';
 
       final String idTrat = (m['idTratamento'] ?? '').toString();
       final t = tratMapById[idTrat] ?? {};
       final String nomeMed = (t['nomeMedicamento'] ?? 'Tratamento').toString();
-      final String conc = (t['concentracaoMedicamento'] ?? '').toString();
+      final String conc    = (t['concentracaoMedicamento'] ?? '').toString();
       final String dosagem = (t['dosagem'] ?? '').toString();
 
       int? atrasoMin;
-      if (tomado != null) {
+      if (tomado != null && agendado != null) {
         atrasoMin = tomado.difference(agendado).inMinutes;
       }
 
       timeline.add(TimelineEvent(
-        quandoLocal: tomado ?? agendado,
+        quandoLocal: (tomado ?? agendado ?? DateTime.now()),
         tipo: status.isEmpty ? 'lembrete' : 'lembrete_$status',
         titulo: nomeMed.isEmpty ? 'Lembrete' : nomeMed,
         detalhe: [
           if (conc.isNotEmpty) conc,
           if (dosagem.isNotEmpty) 'Dose: $dosagem',
           if (status.isNotEmpty) 'Status: ${status.toUpperCase()}',
-          'Agendado: ${_dfDateTime.format(agendado)}',
+          if (agendado != null) 'Agendado: ${_dfDateTime.format(agendado)}',
           if (tomado != null) 'Tomado: ${_dfDateTime.format(tomado)}',
           if (atrasoMin != null) 'Atraso: ${atrasoMin.abs()} min',
         ].join(' - '),
@@ -171,12 +183,12 @@ class RelatorioService {
     }
 
     // Sintomas
-    for (final d in sintomasSnap.docs) {
-      final m = d.data();
-      final DateTime quando = (m['dataHora'] as Timestamp).toDate().toLocal();
-      final nome = (m['nome'] ?? 'Sintoma').toString();
+    for (final mRaw in sintomasPeriodo) {
+      final m = Map<String, dynamic>.from(mRaw);
+      final DateTime quando = (_toDate(m['dataHora']) ?? DateTime.now()).toLocal();
+      final nome        = (m['nome'] ?? 'Sintoma').toString();
       final intensidade = (m['intensidade'] ?? '').toString();
-      final obs = (m['observacoes'] ?? '').toString();
+      final obs         = (m['observacoes'] ?? '').toString();
 
       timeline.add(TimelineEvent(
         quandoLocal: quando,
@@ -192,13 +204,13 @@ class RelatorioService {
 
     timeline.sort((a, b) => a.quandoLocal.compareTo(b.quandoLocal));
 
-    // 5) Gerar arquivos conforme flags
+    // ---------- Geração de arquivos ----------
     final dir = await getTemporaryDirectory();
     final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
 
     String csvTimelinePath = '';
-    String csvResumoPath = '';
-    String pdfPath = '';
+    String csvResumoPath   = '';
+    String pdfPath         = '';
 
     if (makeCsvTimeline) {
       csvTimelinePath = '${dir.path}/alertaMED_timeline_$stamp.csv';
@@ -209,7 +221,7 @@ class RelatorioService {
       csvResumoPath = '${dir.path}/alertaMED_resumo_tratamentos_ativos_$stamp.csv';
       await _gerarCsvResumoTratamentos(
         csvResumoPath,
-        tratamentosSnap.docs,
+        tratamentosAtivos,
         separador: ';',
         anonimizar: anonimizar,
       );
@@ -219,11 +231,11 @@ class RelatorioService {
       pdfPath = '${dir.path}/alertaMED_relatorio_$stamp.pdf';
       await _gerarPdf(
         path: pdfPath,
-        nomeUsuario: nomeUsuario,
+        nomeUsuario: nomeCtx,
         inicio: inicio,
         fim: fim,
         timeline: timeline,
-        tratamentosAtivos: tratamentosSnap.docs.map((e) => e.data()).toList(),
+        tratamentosAtivos: tratamentosAtivos,
         anonimizar: anonimizar,
       );
     }
@@ -235,7 +247,10 @@ class RelatorioService {
     );
   }
 
-  /// Compartilha arquivos existentes via share_plus
+  // =======================================================================
+  // Compartilhamento / Salvamento (inalterados)
+  // =======================================================================
+
   Future<void> compartilharArquivos({
     required List<String> paths,
     String? texto,
@@ -248,7 +263,6 @@ class RelatorioService {
     await Share.shareXFiles(files, text: texto);
   }
 
-  /// Salva os arquivos no dispositivo usando file_saver (MimeType enum)
   Future<void> salvarNoDispositivo({
     required List<String> paths,
   }) async {
@@ -268,18 +282,13 @@ class RelatorioService {
       };
 
       await FileSaver.instance.saveFile(
-        name: base,                                // sem extensão
+        name: base,
         bytes: bytes,
-        ext: ext.replaceFirst('.', ''),            // 'pdf' | 'csv' | ...
+        ext: ext.replaceFirst('.', ''),
         mimeType: mime,
       );
     }
   }
-
-  // =======================================================================
-  // PRIVADOS — Geração de arquivos
-  // =======================================================================
-
 
   Future<void> salvarComPicker({
     required List<String> paths,
@@ -288,23 +297,19 @@ class RelatorioService {
       final file = File(path);
       if (!await file.exists()) continue;
 
-      final fileName = p.basename(path); // mantém extensão correta
+      final fileName = p.basename(path);
       final params = SaveFileDialogParams(
-        sourceFilePath: path,  // copia do temp p/ local escolhido
-        fileName: fileName,    // sugere nome
+        sourceFilePath: path,
+        fileName: fileName,
       );
 
-      // Abre o diálogo nativo (Android: SAF, iOS: UIDocumentPicker)
-      final savedPath = await FlutterFileDialog.saveFile(params: params);
-
-      // Opcional: feedback
-      if (savedPath == null) {
-        // usuário cancelou
-      } else {
-        // sucesso, savedPath é o destino final
-      }
+      await FlutterFileDialog.saveFile(params: params);
     }
   }
+
+  // =======================================================================
+  // CSV / PDF
+  // =======================================================================
 
   Future<void> _gerarCsvTimeline(
       String path,
@@ -312,7 +317,6 @@ class RelatorioService {
         String separador = ';',
       }) async {
     final sink = File(path).openWrite(encoding: const Utf8Codec());
-    // Cabeçalho
     sink.writeln([
       'tipo_evento',
       'titulo',
@@ -348,9 +352,9 @@ class RelatorioService {
 
   Future<void> _gerarCsvResumoTratamentos(
       String path,
-      List<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
+      List<Map<String, dynamic>> tratamentosAtivos, {
         String separador = ';',
-        bool anonimizar = false, // (mantido por compat, mas não usado aqui)
+        bool anonimizar = false, // mantido por compat
       }) async {
     final sink = File(path).openWrite(encoding: const Utf8Codec());
     sink.writeln([
@@ -368,10 +372,9 @@ class RelatorioService {
       'status',
     ].join(separador));
 
-    for (final d in docs) {
-      final m = d.data();
-      final di = (m['dataInicio'] as Timestamp?)?.toDate().toLocal();
-      final dt = (m['dataTermino'] as Timestamp?)?.toDate().toLocal();
+    for (final m in tratamentosAtivos) {
+      final di = _toDate(m['dataInicio'])?.toLocal();
+      final dt = _toDate(m['dataTermino'])?.toLocal();
       sink.writeln([
         _csvSafe((m['nomeMedicamento'] ?? '').toString()),
         _csvSafe((m['concentracaoMedicamento'] ?? '').toString()),
@@ -406,11 +409,10 @@ class RelatorioService {
     final inicioStr = _dfDateTime.format(inicio.toLocal());
     final fimStr = _dfDateTime.format(fim.toLocal());
 
-    // Resumos
     final totalLembretesTomados = timeline.where((e) => e.tipo == 'lembrete_tomado').length;
     final totalLembretesAdiados = timeline.where((e) => e.tipo == 'lembrete_adiado').length;
-    final totalLembretesCancel = timeline.where((e) => e.tipo == 'lembrete_cancelado').length;
-    final totalSintomas = timeline.where((e) => e.tipo == 'sintoma').length;
+    final totalLembretesCancel  = timeline.where((e) => e.tipo == 'lembrete_cancelado').length;
+    final totalSintomas         = timeline.where((e) => e.tipo == 'sintoma').length;
 
     pdf.addPage(
       pw.MultiPage(
@@ -424,7 +426,8 @@ class RelatorioService {
               style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold),
             ),
           ),
-          pw.Text('Paciente/Cuidador: $tituloUsuario'),
+          pw.Text('Nome'
+              ': $tituloUsuario'),
           pw.Text('Período: $inicioStr - $fimStr'),
           pw.SizedBox(height: 12),
           pw.Container(
@@ -520,8 +523,8 @@ class RelatorioService {
       'Status'
     ];
     final data = ts.map((m) {
-      final di = (m['dataInicio'] as Timestamp?)?.toDate().toLocal();
-      final dt = (m['dataTermino'] as Timestamp?)?.toDate().toLocal();
+      final di = _toDate(m['dataInicio'])?.toLocal();
+      final dt = _toDate(m['dataTermino'])?.toLocal();
       return [
         (m['nomeMedicamento'] ?? '').toString(),
         (m['concentracaoMedicamento'] ?? '').toString(),
@@ -569,11 +572,31 @@ class RelatorioService {
   }
 
   String _csvSafe(String s) {
-    // Coloca entre aspas se tiver separador, aspas ou quebra de linha
     if (s.contains(';') || s.contains(',') || s.contains('\n') || s.contains('"')) {
       final escaped = s.replaceAll('"', '""');
       return '"$escaped"';
     }
     return s;
+  }
+
+  // =======================================================================
+  // Util: converter dinamicamente para DateTime
+  // =======================================================================
+  DateTime? _toDate(dynamic v) {
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    if (v is Timestamp) return v.toDate();
+    if (v is int) {
+      // se vier epoch millis
+      try {
+        return DateTime.fromMillisecondsSinceEpoch(v, isUtc: false);
+      } catch (_) {}
+    }
+    if (v is String) {
+      try {
+        return DateTime.parse(v);
+      } catch (_) {}
+    }
+    return null;
   }
 }

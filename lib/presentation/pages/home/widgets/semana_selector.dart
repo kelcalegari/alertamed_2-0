@@ -1,8 +1,50 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
+import '../../../../providers/user_data_provider.dart';
 import '../../../routes/routes.dart';
 import '../../../themes/app_colors.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+// + utilitário para renderizar nome público por UID
+class _NomePublico extends StatelessWidget {
+  final String uid;
+  final String fallback; // exibe algo caso ainda não carregou
+  final TextStyle? style;
+  const _NomePublico({
+    Key? key,
+    required this.uid,
+    this.fallback = 'Usuário',
+    this.style,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final docRef = FirebaseFirestore.instance
+        .collection('usuarios_publicos')
+        .doc(uid);
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: docRef.snapshots(),
+      builder: (context, snap) {
+        if (snap.hasData && snap.data!.exists) {
+          final data = snap.data!.data();
+          final nome = (data?['displayName'] as String?)?.trim();
+          return Text(
+            (nome?.isNotEmpty ?? false) ? nome! : fallback,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          );
+        }
+        if (snap.hasError) {
+          return Text(fallback, overflow: TextOverflow.ellipsis, style: style);
+        }
+        // carregando
+        return Text(fallback, overflow: TextOverflow.ellipsis, style: style);
+      },
+    );
+  }
+}
 
 class SemanaSelector extends StatefulWidget {
   final Function(DateTime) onSemanaChanged;
@@ -17,7 +59,7 @@ class SemanaSelector extends StatefulWidget {
 class _SemanaSelectorState extends State<SemanaSelector> {
   DateTime semanaAtual = DateTime.now();
   DateTime diaSelecionado = DateTime.now();
-
+  String? _usuarioContextoId;
   List<DateTime> getDiasDaSemana() {
     int diaSemana = semanaAtual.weekday; // 1 = segunda, 7 = domingo
     DateTime segunda = semanaAtual.subtract(
@@ -54,7 +96,17 @@ class _SemanaSelectorState extends State<SemanaSelector> {
   @override
   Widget build(BuildContext context) {
     final dias = getDiasDaSemana();
-
+    final prov = context.watch<UsuarioProvider>();
+    final meuUid = prov.userId;
+    final meuNome = (prov.dadosUsuario['nome'] as String?) ?? 'Você';
+    // pega vínculos onde eu sou cuidador e estão ativos
+    final pacientes = prov.vinculosMap.entries
+        .where((e) => (e.value['meuPapel'] == 'cuidador') && (e.value['status'] == 'ativo'))
+        .map((e) => e.key) // otherUid
+        .toList();
+    _usuarioContextoId ??= meuUid;
+    final contextoId = prov.contextoUsuarioId;
+    final bool isCuidador = pacientes.isNotEmpty;
     return Container(
       color: AppColors.background,
       padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 20),
@@ -83,7 +135,7 @@ class _SemanaSelectorState extends State<SemanaSelector> {
                 ),
               ),
               Row(
-                mainAxisAlignment: MainAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
 
                   IconButton(
@@ -92,6 +144,53 @@ class _SemanaSelectorState extends State<SemanaSelector> {
                       Navigator.pushNamed(context, Routes.configuracao);
                     },
                   ),
+                  if (isCuidador)
+                    PopupMenuButton<String>(
+                      icon: Icon(
+                        contextoId == meuUid
+                            ? Icons.account_circle_outlined  // eu mesmo
+                            : Icons.local_hospital_outlined, // paciente selecionado
+                        color: AppColors.textBranco,
+                      ),
+                      color: AppColors.cardBackgroundBranco,
+                      onSelected: (uidSelecionado) async {
+                        await prov.setContextoUsuario(uidSelecionado);
+                        setState(() {}); // reconstrói para atualizar o ícone
+                      },
+                      itemBuilder: (context) => [
+                        // EU
+                        PopupMenuItem<String>(
+                          value: meuUid,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.account_circle_outlined, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: _NomePublico(uid: meuUid, fallback: meuNome),
+                              ),
+                              if (contextoId == meuUid) const Icon(Icons.check, size: 18),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuDivider(),
+                        // PACIENTES
+                        ...pacientes.map((otherUid) {
+                          return PopupMenuItem<String>(
+                            value: otherUid,
+                            child: Row(
+                              children: [
+                                const Icon(Icons.local_hospital_outlined, size: 20),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: _NomePublico(uid: otherUid, fallback: otherUid),
+                                ),
+                                if (contextoId == otherUid) const Icon(Icons.check, size: 18),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
                 ],
               ),
             ],

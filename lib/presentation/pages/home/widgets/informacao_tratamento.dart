@@ -370,8 +370,7 @@ class InformacaoTratamento extends StatelessWidget {
                   ),
                 ),
               ),
-
-              // ---------- Ações ----------
+              if ((usuarioProvider.isContextoSouEu && !usuarioProvider.bloquearEdicaoPorPoliticaDoCuidador) || (!usuarioProvider.isContextoSouEu && !usuarioProvider.isPacienteComVisualizacao ))
               Container(
                 decoration: const BoxDecoration(
                   color: AppColors.cardBackgroundBranco,

@@ -1,7 +1,9 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
+import '../../../../providers/user_data_provider.dart';
 import '../../../themes/app_colors.dart';
 
 class LembreteDetalhePopup {
@@ -17,6 +19,10 @@ class LembreteDetalhePopup {
     required VoidCallback onPular,
     VoidCallback? onVerDetalhe,
   }) {
+    final usuarioProvider = Provider.of<UsuarioProvider>(
+      context,
+      listen: false,
+    );
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -68,64 +74,69 @@ class LembreteDetalhePopup {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 20),
-                    _buildBotaoPrincipal(
-                      "Tomei",
-                      AppColors.botoesVerdes,
-                      onTomar,
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildBotaoSecundario(
-                            "Adiar",
-                            AppColors.botoesCinza,
-                            () async {
-                              final DateTime? novaData = await showDatePicker(
-                                context: context,
-                                initialDate: DateFormat(
-                                  'dd/MM/yyyy',
-                                ).parse(data),
-                                firstDate: DateTime.now(),
-                                lastDate: DateTime.now().add(
-                                  const Duration(days: 365),
-                                ),
-                              );
+                    if (usuarioProvider.isContextoSouEu) ...[
+                      const SizedBox(height: 20),
+                      _buildBotaoPrincipal(
+                        "Tomei",
+                        AppColors.botoesVerdes,
+                        onTomar,
+                      ),
+                    ],
+                    if ((!usuarioProvider.isContextoSouEu &&
+                        !usuarioProvider.isPacienteComVisualizacao)|| usuarioProvider.isContextoSouEu) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildBotaoSecundario(
+                              "Adiar",
+                              AppColors.botoesCinza,
+                              () async {
+                                final DateTime? novaData = await showDatePicker(
+                                  context: context,
+                                  initialDate: DateFormat(
+                                    'dd/MM/yyyy',
+                                  ).parse(data),
+                                  firstDate: DateTime.now(),
+                                  lastDate: DateTime.now().add(
+                                    const Duration(days: 365),
+                                  ),
+                                );
 
-                              if (novaData == null) return;
+                                if (novaData == null) return;
 
-                              final TimeOfDay? novoHorario =
-                                  await showTimePicker(
-                                    context: context,
-                                    initialTime: _parseTimeOfDay(horario),
-                                  );
+                                final TimeOfDay? novoHorario =
+                                    await showTimePicker(
+                                      context: context,
+                                      initialTime: _parseTimeOfDay(horario),
+                                    );
 
-                              if (novoHorario == null) return;
+                                if (novoHorario == null) return;
 
-                              final DateTime novaDataHora = DateTime(
-                                novaData.year,
-                                novaData.month,
-                                novaData.day,
-                                novoHorario.hour,
-                                novoHorario.minute,
-                              );
+                                final DateTime novaDataHora = DateTime(
+                                  novaData.year,
+                                  novaData.month,
+                                  novaData.day,
+                                  novoHorario.hour,
+                                  novoHorario.minute,
+                                );
 
-                              onAdiar(novaDataHora);
-                            },
+                                onAdiar(novaDataHora);
+                              },
+                            ),
                           ),
-                        ),
 
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _buildBotaoSecundario(
-                            "Pular",
-                            AppColors.botoesVermelho,
-                            onPular,
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _buildBotaoSecundario(
+                              "Pular",
+                              AppColors.botoesVermelho,
+                              onPular,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

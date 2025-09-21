@@ -114,12 +114,14 @@ class _CardGerarRelatorioState extends State<CardGerarRelatorio> {
       final String nomeUsuario = provider.dadosUsuario["nome"] ?? 'Usuário';
 
       final service = RelatorioService();
-      final result = await service.gerarTimelineEResumo(
-        idUsuario: idUsuario,
-        nomeUsuario: nomeUsuario,
+      final result = await RelatorioService().gerarTimelineEResumo(
+        userProv: provider,
         inicio: _inicio!,
         fim: _fim!,
         anonimizar: _anonimizar,
+        nomeUsuario: provider.contextoNomePublico.isNotEmpty
+            ? provider.contextoNomePublico
+            : null,
         makePdf: _optPdf,
         makeCsvTimeline: _optCsvTimeline,
         makeCsvResumo: _optCsvResumo,

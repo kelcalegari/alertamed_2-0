@@ -98,11 +98,11 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_isInit) {
-      final usuarioProvider = Provider.of<UsuarioProvider>(
+      UsuarioProvider usuarioProvider = Provider.of<UsuarioProvider>(
         context,
         listen: false,
       );
-      final dados = usuarioProvider.dadosUsuario;
+      Map<String, dynamic> dados = usuarioProvider.dadosUsuario;
 
       _nameCtrl.text = dados['nome'] ?? '';
       _birthCtrl.text =
@@ -227,8 +227,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
   Widget _buildEditarPerfil() {
     Future<bool> reautenticarUsuario(String email, String senhaAtual) async {
       try {
-        final user = FirebaseAuth.instance.currentUser;
-        final cred = EmailAuthProvider.credential(
+        User? user = FirebaseAuth.instance.currentUser;
+        AuthCredential cred = EmailAuthProvider.credential(
           email: email,
           password: senhaAtual,
         );
@@ -265,6 +265,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
                       icon: Icon(Icons.logout, color: AppColors.textVerde),
                       onPressed: () async {
                         await FirebaseAuth.instance.signOut();
+                        context.read<UsuarioProvider>().clearState();
                         if (!mounted) return;
                         Navigator.pushNamed(context, Routes.onboarding);
                       },
@@ -365,7 +366,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
                 ),
                 onPressed: () async {
                   if (!_formKey.currentState!.validate()) return;
-                  final user = FirebaseAuth.instance.currentUser;
+                  User? user = FirebaseAuth.instance.currentUser;
                   if (user == null) return;
 
                   // Reautenticar
@@ -392,8 +393,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
 
                   try {
                     // Atualizar dados no Firestore
-                    final userDoc = FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
-                    final usuarioProvider = Provider.of<UsuarioProvider>(context, listen: false);
+                    DocumentReference<Map<String, dynamic>> userDoc = FirebaseFirestore.instance.collection('usuarios').doc(user.uid);
+                    UsuarioProvider usuarioProvider = Provider.of<UsuarioProvider>(context, listen: false);
                     await userDoc.update({
                       'nome': _nameCtrl.text,
                       'sexo': _selectedGender,

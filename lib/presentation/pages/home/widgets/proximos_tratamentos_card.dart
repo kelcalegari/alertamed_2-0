@@ -19,7 +19,8 @@ class ProximosTratamentosCard extends StatelessWidget {
     required this.onRegistrarSintoma,
     required this.onRegistrarTratamento,
     required this.onCardAssistenteIa,
-    required this.dia, required this.onCardRelatorio,
+    required this.dia,
+    required this.onCardRelatorio,
   });
 
   @override
@@ -81,7 +82,6 @@ class ProximosTratamentosCard extends StatelessWidget {
                 final idTrat = l['idTratamento'];
                 final tratamento = usuarioProvider.tratamentosMap[idTrat] ?? {};
 
-
                 final nome = tratamento['nomeMedicamento'] ?? 'Medicamento';
                 final dosagem = tratamento['dosagem'] ?? '';
                 final tipoMedicamento = tratamento['tipoMedicamento'] ?? '';
@@ -112,8 +112,7 @@ class ProximosTratamentosCard extends StatelessWidget {
                             context: context,
                             idUsuario: userId,
                             idLembrete: idLembrete,
-                            novaDataHora:
-                            novaDataHora,
+                            novaDataHora: novaDataHora,
                           );
                           _handleRefresh();
                           Navigator.pop(context);
@@ -170,12 +169,21 @@ class ProximosTratamentosCard extends StatelessWidget {
                 );
               }),
             ],
-            const SizedBox(height: 16),
-            _buildBotao(context, "Adicionar Tratamento", onRegistrarTratamento),
-            const SizedBox(height: 8),
-            _buildBotao(context, "Registrar Sintoma", onRegistrarSintoma),
-            const SizedBox(height: 8),
-            _buildBotao(context, "Orientação Inteligente", onCardAssistenteIa),
+            if ((usuarioProvider.isContextoSouEu && !usuarioProvider.bloquearEdicaoPorPoliticaDoCuidador) || (!usuarioProvider.isContextoSouEu && !usuarioProvider.isPacienteComVisualizacao )) ...[
+              const SizedBox(height: 16),
+              _buildBotao(
+                context,
+                "Adicionar Tratamento",
+                onRegistrarTratamento,
+              ),
+            ],
+            if (usuarioProvider.isContextoSouEu ) ...[
+              const SizedBox(height: 8),
+              _buildBotao(context, "Registrar Sintoma", onRegistrarSintoma),
+              const SizedBox(height: 8),
+              _buildBotao(context, "Orientação Inteligente", onCardAssistenteIa),
+
+            ],
             const SizedBox(height: 8),
             _buildBotao(context, "Gerar Retórios", onCardRelatorio),
             const SizedBox(height: 100),

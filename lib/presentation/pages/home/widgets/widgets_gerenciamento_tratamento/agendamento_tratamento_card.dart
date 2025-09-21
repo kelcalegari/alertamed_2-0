@@ -22,6 +22,7 @@ class AgendamentoTratamento extends StatefulWidget {
   // OPCIONAL: expõe os horários fixos como strings "HH:mm"
   final void Function(List<String> horariosFixos)? onHorariosFixosChanged;
   final void Function(List<String> refeicoesSelecionadas)? onRefeicoesChanged;
+
   const AgendamentoTratamento({
     super.key,
     required this.formKeyIndexDois,
@@ -35,7 +36,6 @@ class AgendamentoTratamento extends StatefulWidget {
     required this.vectorUnidadesMedidaLembrete,
     required this.onSelectedUnidadesMedidaLembreteChanged,
     required this.selectedTipoFrequencia,
-
     this.onHorariosFixosChanged,
     this.onRefeicoesChanged,
     required this.selectedTipoTratamento,
@@ -51,8 +51,8 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
   final List<TextEditingController> _horariosCtrls = [TextEditingController()];
 
   // ---- Estado para Refeições ----
-  // (usamos strings canônicas: 'cafe', 'almoco', 'jantar')
   final Set<String> _refeicoesSelecionadas = {};
+
   @override
   void dispose() {
     _qtdDosesDiaCtrl.dispose();
@@ -61,7 +61,6 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
   }
 
   void _sincronizarQtdDoses(int qtd) {
-    // garante o mesmo tamanho da lista de controllers
     if (qtd < 1) qtd = 1;
     if (qtd > _horariosCtrls.length) {
       final diff = qtd - _horariosCtrls.length;
@@ -80,11 +79,10 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
 
   void _emitHorariosFixos() {
     if (widget.onHorariosFixosChanged == null) return;
-    final list =
-        _horariosCtrls
-            .map((c) => c.text.trim())
-            .where((t) => t.isNotEmpty)
-            .toList();
+    final list = _horariosCtrls
+        .map((c) => c.text.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
     widget.onHorariosFixosChanged!(list);
     setState(() {});
   }
@@ -94,7 +92,6 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
     for (final c in _horariosCtrls) {
       if (c.text.trim().isEmpty) return "Preencha todos os horários das doses";
     }
-    // (Opcional) checa duplicados
     final set = <String>{};
     for (final c in _horariosCtrls) {
       final t = c.text.trim();
@@ -109,7 +106,6 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
     final isDoseUnica =
         widget.selectedTipoTratamento == 'Tratamento Dose única';
     if (isDoseUnica) {
-      // permite somente 1 selecionada
       _refeicoesSelecionadas
         ..clear()
         ..add(key);
@@ -134,7 +130,6 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
     if (_refeicoesSelecionadas.isEmpty) {
       return "Selecione ao menos uma refeição";
     }
-    // se dose única, garantir 1 só (já garantido no toggle)
     return null;
   }
 
@@ -148,6 +143,7 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
     final isContinuo = widget.selectedTipoTratamento == 'Tratamento Contínuo';
     final isDoseUnica =
         widget.selectedTipoTratamento == 'Tratamento Dose única';
+
     return Form(
       key: widget.formKeyIndexDois,
       child: Padding(
@@ -171,7 +167,6 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
 
             // ===================== MODO INTERVALOS FIXOS =====================
             if (!isFixos && !isRefeicao) ...[
-              // Linha com "A cada" (Frequência) ➜ só Determinado/Contínuo
               if (!isDoseUnica)
                 Row(
                   children: [
@@ -184,16 +179,13 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         pad: 0,
                         textInputType: TextInputType.number,
                         icon: Icons.access_time,
-                        validador:
-                            (v) =>
-                                (isDeterminado || isContinuo)
-                                    ? (v == null || v.trim().isEmpty
-                                        ? "Informe a frequência"
-                                        : null)
-                                    : null,
+                        validador: (v) => (isDeterminado || isContinuo)
+                            ? (v == null || v.trim().isEmpty
+                            ? "Informe a frequência"
+                            : null)
+                            : null,
                       ),
                     ),
-                    // Qtd por dose
                     Flexible(
                       flex: 3,
                       child: CustomTextField(
@@ -202,42 +194,38 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         label: "Qtd por dose",
                         textInputType: TextInputType.number,
                         hint: "1",
-                        validador:
-                            (v) =>
-                                (v == null || v.trim().isEmpty)
-                                    ? "Informe a quantidade"
-                                    : null,
+                        validador: (v) => (v == null || v.trim().isEmpty)
+                            ? "Informe a quantidade"
+                            : null,
                       ),
                     ),
-                    // Unidade
                     Flexible(
                       flex: 4,
                       child: CustomSelectorField<String>(
-                        selectedValue: widget.selectedUnidadesMedidaLembrete,
-                        items:
-                            widget.vectorUnidadesMedidaLembrete
-                                .map(
-                                  (g) => DropdownMenuItem(
-                                    value: g,
-                                    child: Text(g),
-                                  ),
-                                )
-                                .toList(),
+                        selectedValue:
+                        widget.selectedUnidadesMedidaLembrete,
+                        items: widget.vectorUnidadesMedidaLembrete
+                            .map(
+                              (g) => DropdownMenuItem<String>(
+                            value: g,
+                            child: Text(
+                              g,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                            .toList(),
                         onChanged:
-                            widget.onSelectedUnidadesMedidaLembreteChanged,
+                        widget.onSelectedUnidadesMedidaLembreteChanged,
                         hint: widget.vectorUnidadesMedidaLembrete[0],
                         pad: 0,
-                        validador:
-                            (v) =>
-                                v == null
-                                    ? "Informe a Unidade de Medida"
-                                    : null,
+                        validador: (v) =>
+                        v == null ? "Informe a Unidade de Medida" : null,
                       ),
                     ),
                   ],
                 ),
 
-              // Quantidade Total + Unidade ➜ só Determinado
               if (isDeterminado) ...[
                 const SizedBox(height: 20),
                 Row(
@@ -250,49 +238,47 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         label: "Quantidade Total",
                         textInputType: TextInputType.number,
                         hint: "1",
-                        validador:
-                            (v) =>
-                                v == null || v.trim().isEmpty
-                                    ? "Informe a quantidade total"
-                                    : null,
+                        validador: (v) => v == null || v.trim().isEmpty
+                            ? "Informe a quantidade total"
+                            : null,
                       ),
                     ),
                     Flexible(
                       flex: 3,
                       child: CustomSelectorField<String>(
-                        selectedValue: widget.selectedUnidadesMedidaLembrete,
-                        items:
-                            widget.vectorUnidadesMedidaLembrete
-                                .map(
-                                  (g) => DropdownMenuItem(
-                                    value: g,
-                                    child: Text(g),
-                                  ),
-                                )
-                                .toList(),
+                        selectedValue:
+                        widget.selectedUnidadesMedidaLembrete,
+                        items: widget.vectorUnidadesMedidaLembrete
+                            .map(
+                              (g) => DropdownMenuItem<String>(
+                            value: g,
+                            child: Text(
+                              g,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                            .toList(),
                         onChanged:
-                            widget.onSelectedUnidadesMedidaLembreteChanged,
+                        widget.onSelectedUnidadesMedidaLembreteChanged,
                         hint: widget.vectorUnidadesMedidaLembrete[0],
                         pad: 0,
-                        validador:
-                            (v) =>
-                                v == null
-                                    ? "Informe a Unidade de Medida"
-                                    : null,
+                        validador: (v) =>
+                        v == null ? "Informe a Unidade de Medida" : null,
                       ),
                     ),
                   ],
                 ),
               ],
               if (!isDoseUnica)
-              const Text(
-                "Inicio",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: AppColors.textVerde,
+                const Text(
+                  "Inicio",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: AppColors.textVerde,
+                  ),
                 ),
-              ),
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -307,20 +293,17 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                       icon: Icons.access_time,
                       isTime: true,
                       validador: (v) {
-                        if (isFixos) return null; // não valida nesse caso
-
+                        if (isFixos) return null;
                         if (v == null || v.trim().isEmpty) {
                           return "Informe a hora da primeira dose";
                         }
-
                         try {
                           final partes = v.split(":");
-                          if (partes.length != 2)
+                          if (partes.length != 2) {
                             return "Formato inválido (use HH:mm)";
-
+                          }
                           final hora = int.parse(partes[0]);
                           final minuto = int.parse(partes[1]);
-
                           final agora = DateTime.now();
                           final horaInformada = DateTime(
                             agora.year,
@@ -329,16 +312,13 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                             hora,
                             minuto,
                           );
-
                           final limite = agora.add(const Duration(minutes: 10));
-
                           if (horaInformada.isBefore(limite)) {
                             return "A primeira dose deve ser pelo menos 10 minutos após agora";
                           }
-                        } catch (e) {
+                        } catch (_) {
                           return "Hora inválida";
                         }
-
                         return null;
                       },
                     ),
@@ -351,9 +331,7 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                       hint: "25/05/2025",
                       pad: 0,
                       textInputType: TextInputType.datetime,
-                      validador:
-                          (v) =>
-                      !isFixos
+                      validador: (v) => !isFixos
                           ? (v == null || v.trim().isEmpty
                           ? "Informe a data da primeira dose"
                           : null)
@@ -363,8 +341,7 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                 ],
               ),
 
-              /// Término ➜ só Determinado
-              if (isDeterminado)...[
+              if (isDeterminado) ...[
                 const Text(
                   "Fim",
                   style: TextStyle(
@@ -379,12 +356,11 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                   hint: "25/06/2025",
                   pad: 0,
                   textInputType: TextInputType.text,
-                  validador:
-                      (v) =>
-                          (v == null || v.trim().isEmpty)
-                              ? "Informe a data do fim"
-                              : null,
-                ),]
+                  validador: (v) => (v == null || v.trim().isEmpty)
+                      ? "Informe a data do fim"
+                      : null,
+                ),
+              ],
             ],
 
             // ===================== MODO HORÁRIOS FIXOS =====================
@@ -400,13 +376,11 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         label: "Doses por dia",
                         textInputType: TextInputType.number,
                         hint: "3",
-                        validador:
-                            (v) =>
-                                isFixos
-                                    ? (v == null || v.trim().isEmpty
-                                        ? "Informe a quantidade de doses"
-                                        : null)
-                                    : null,
+                        validador: (v) => isFixos
+                            ? (v == null || v.trim().isEmpty
+                            ? "Informe a quantidade de doses"
+                            : null)
+                            : null,
                         onComplete: () {
                           final qtd =
                               int.tryParse(_qtdDosesDiaCtrl.text.trim()) ?? 1;
@@ -415,7 +389,6 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    // Qtd por dose + Unidade ➜ sempre (inclusive dose única)
                     Flexible(
                       flex: 3,
                       child: CustomTextField(
@@ -424,44 +397,40 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         label: "Qtd por dose",
                         textInputType: TextInputType.number,
                         hint: "1",
-                        validador:
-                            (v) =>
-                                (v == null || v.trim().isEmpty)
-                                    ? "Informe a quantidade por dose"
-                                    : null,
+                        validador: (v) => (v == null || v.trim().isEmpty)
+                            ? "Informe a quantidade por dose"
+                            : null,
                       ),
                     ),
                     const SizedBox(width: 8),
                     Flexible(
                       flex: 4,
                       child: CustomSelectorField<String>(
-                        selectedValue: widget.selectedUnidadesMedidaLembrete,
-                        items:
-                            widget.vectorUnidadesMedidaLembrete
-                                .map(
-                                  (g) => DropdownMenuItem(
-                                    value: g,
-                                    child: Text(g),
-                                  ),
-                                )
-                                .toList(),
+                        selectedValue:
+                        widget.selectedUnidadesMedidaLembrete,
+                        items: widget.vectorUnidadesMedidaLembrete
+                            .map(
+                              (g) => DropdownMenuItem<String>(
+                            value: g,
+                            child: Text(
+                              g,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                            .toList(),
                         onChanged:
-                            widget.onSelectedUnidadesMedidaLembreteChanged,
+                        widget.onSelectedUnidadesMedidaLembreteChanged,
                         hint: widget.vectorUnidadesMedidaLembrete[0],
                         pad: 0,
-                        validador:
-                            (v) =>
-                                v == null
-                                    ? "Informe a Unidade de Medida"
-                                    : null,
+                        validador: (v) =>
+                        v == null ? "Informe a Unidade de Medida" : null,
                       ),
                     ),
                   ],
                 ),
               if (!isDoseUnica) ...[
                 const SizedBox(height: 16),
-
-                // Lista dinâmica de horários
                 const Text(
                   "Horários das doses",
                   style: TextStyle(
@@ -494,16 +463,15 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         const SizedBox(width: 8),
                         IconButton(
                           tooltip: 'Remover horário',
-                          onPressed:
-                              _horariosCtrls.length > 1
-                                  ? () {
-                                    _horariosCtrls.removeAt(i).dispose();
-                                    _qtdDosesDiaCtrl.text =
-                                        _horariosCtrls.length.toString();
-                                    setState(() {});
-                                    _emitHorariosFixos();
-                                  }
-                                  : null,
+                          onPressed: _horariosCtrls.length > 1
+                              ? () {
+                            _horariosCtrls.removeAt(i).dispose();
+                            _qtdDosesDiaCtrl.text =
+                                _horariosCtrls.length.toString();
+                            setState(() {});
+                            _emitHorariosFixos();
+                          }
+                              : null,
                           icon: const Icon(Icons.delete_outline),
                         ),
                       ],
@@ -511,7 +479,6 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                   );
                 }),
               ],
-              // ➜ Para DOSE ÚNICA em Fixos: um único horário (usa horaInicialCtrl)
               if (isDoseUnica) ...[
                 Row(
                   children: [
@@ -523,24 +490,24 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         label: "Quantidade por dose",
                         textInputType: TextInputType.number,
                         hint: "1",
-                        validador:
-                            (v) =>
-                        (v == null || v.trim().isEmpty)
+                        validador: (v) => (v == null || v.trim().isEmpty)
                             ? "Informe a quantidade"
                             : null,
                       ),
                     ),
-                    // Unidade
                     Flexible(
                       flex: 4,
                       child: CustomSelectorField<String>(
-                        selectedValue: widget.selectedUnidadesMedidaLembrete,
-                        items:
-                        widget.vectorUnidadesMedidaLembrete
+                        selectedValue:
+                        widget.selectedUnidadesMedidaLembrete,
+                        items: widget.vectorUnidadesMedidaLembrete
                             .map(
-                              (g) => DropdownMenuItem(
+                              (g) => DropdownMenuItem<String>(
                             value: g,
-                            child: Text(g),
+                            child: Text(
+                              g,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                         )
                             .toList(),
@@ -548,11 +515,8 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         widget.onSelectedUnidadesMedidaLembreteChanged,
                         hint: widget.vectorUnidadesMedidaLembrete[0],
                         pad: 0,
-                        validador:
-                            (v) =>
-                        v == null
-                            ? "Informe a Unidade de Medida"
-                            : null,
+                        validador: (v) =>
+                        v == null ? "Informe a Unidade de Medida" : null,
                       ),
                     ),
                   ],
@@ -566,11 +530,8 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                   isTime: true,
                   textInputType: TextInputType.text,
                   icon: Icons.access_time,
-                  validador:
-                      (v) =>
-                          (v == null || v.trim().isEmpty)
-                              ? "Informe a hora"
-                              : null,
+                  validador: (v) =>
+                  (v == null || v.trim().isEmpty) ? "Informe a hora" : null,
                 ),
               ],
               const SizedBox(height: 8),
@@ -579,7 +540,8 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                   OutlinedButton.icon(
                     onPressed: () {
                       _horariosCtrls.add(TextEditingController());
-                      _qtdDosesDiaCtrl.text = _horariosCtrls.length.toString();
+                      _qtdDosesDiaCtrl.text =
+                          _horariosCtrls.length.toString();
                       setState(() {});
                       _emitHorariosFixos();
                     },
@@ -590,7 +552,6 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
               ),
               const SizedBox(height: 20),
 
-              // Período (mesmo do modo intervalos)
               const Text(
                 "Período",
                 style: TextStyle(
@@ -609,13 +570,11 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                       hint: "25/05/2025",
                       pad: 0,
                       textInputType: TextInputType.datetime,
-                      validador:
-                          (v) =>
-                              isFixos
-                                  ? (v == null || v.trim().isEmpty
-                                      ? "Informe a data inicial"
-                                      : null)
-                                  : null,
+                      validador: (v) => isFixos
+                          ? (v == null || v.trim().isEmpty
+                          ? "Informe a data inicial"
+                          : null)
+                          : null,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -627,11 +586,9 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         hint: "25/06/2025",
                         pad: 0,
                         textInputType: TextInputType.datetime,
-                        validador:
-                            (v) =>
-                                (v == null || v.trim().isEmpty)
-                                    ? "Informe a data final"
-                                    : null,
+                        validador: (v) => (v == null || v.trim().isEmpty)
+                            ? "Informe a data final"
+                            : null,
                       ),
                     ),
                 ],
@@ -645,13 +602,13 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                   label: "Quantidade Total (período)",
                   textInputType: TextInputType.number,
                   hint: "30",
-                  validador:
-                      (v) =>
-                          (v == null || v.trim().isEmpty)
-                              ? "Informe a quantidade total para o período"
-                              : null,
+                  validador: (v) => (v == null || v.trim().isEmpty)
+                      ? "Informe a quantidade total para o período"
+                      : null,
                 ),
             ],
+
+            // ===================== MODO REFEIÇÃO =====================
             if (isRefeicao) ...[
               Row(
                 children: [
@@ -663,13 +620,11 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                       label: "Qtd por dose",
                       textInputType: TextInputType.number,
                       hint: "1",
-                      validador:
-                          (v) =>
-                              isRefeicao
-                                  ? (v == null || v.trim().isEmpty
-                                      ? "Informe a quantidade por dose"
-                                      : null)
-                                  : null,
+                      validador: (v) => isRefeicao
+                          ? (v == null || v.trim().isEmpty
+                          ? "Informe a quantidade por dose"
+                          : null)
+                          : null,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -677,23 +632,26 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                     flex: 4,
                     child: CustomSelectorField<String>(
                       selectedValue: widget.selectedUnidadesMedidaLembrete,
-                      items:
-                          widget.vectorUnidadesMedidaLembrete
-                              .map(
-                                (g) =>
-                                    DropdownMenuItem(value: g, child: Text(g)),
-                              )
-                              .toList(),
-                      onChanged: widget.onSelectedUnidadesMedidaLembreteChanged,
+                      items: widget.vectorUnidadesMedidaLembrete
+                          .map(
+                            (g) => DropdownMenuItem<String>(
+                          value: g,
+                          child: Text(
+                            g,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
+                          .toList(),
+                      onChanged:
+                      widget.onSelectedUnidadesMedidaLembreteChanged,
                       hint: widget.vectorUnidadesMedidaLembrete[0],
                       pad: 0,
-                      validador:
-                          (v) =>
-                              isRefeicao
-                                  ? (v == null
-                                      ? "Informe a Unidade de Medida"
-                                      : null)
-                                  : null,
+                      validador: (v) => isRefeicao
+                          ? (v == null
+                          ? "Informe a Unidade de Medida"
+                          : null)
+                          : null,
                     ),
                   ),
                 ],
@@ -710,7 +668,6 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
               ),
               const SizedBox(height: 8),
 
-              // Chips de seleção múltipla
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -733,23 +690,22 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                 ],
               ),
 
-              // Mensagem de validação (inline)
               Builder(
                 builder: (_) {
                   final err = _validaRefeicoes();
                   return err == null
                       ? const SizedBox.shrink()
                       : Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: Text(
-                          err,
-                          style: const TextStyle(
-                            color: Colors.red,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      );
+                    padding: const EdgeInsets.only(top: 8.0),
+                    child: Text(
+                      err,
+                      style: const TextStyle(
+                        color: Colors.red,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  );
                 },
               ),
 
@@ -773,13 +729,11 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                       hint: "25/05/2025",
                       pad: 0,
                       textInputType: TextInputType.datetime,
-                      validador:
-                          (v) =>
-                              isRefeicao
-                                  ? (v == null || v.trim().isEmpty
-                                      ? "Informe a data inicial"
-                                      : null)
-                                  : null,
+                      validador: (v) => isRefeicao
+                          ? (v == null || v.trim().isEmpty
+                          ? "Informe a data inicial"
+                          : null)
+                          : null,
                     ),
                   ),
                   if (isDeterminado) ...[
@@ -791,11 +745,9 @@ class _AgendamentoTratamentoState extends State<AgendamentoTratamento> {
                         hint: "25/06/2025",
                         pad: 0,
                         textInputType: TextInputType.datetime,
-                        validador:
-                            (v) =>
-                                v == null || v.trim().isEmpty
-                                    ? "Informe a data final"
-                                    : null,
+                        validador: (v) => v == null || v.trim().isEmpty
+                            ? "Informe a data final"
+                            : null,
                       ),
                     ),
                   ],

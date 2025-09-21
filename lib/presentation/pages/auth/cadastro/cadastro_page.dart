@@ -233,5 +233,6 @@ class _RegisterPageState extends State<RegisterPage> {
       sexo: _selectedGender!,
       dataNascimentoTexto: _birthCtrl.text.trim(),
     );
+
   }
 }

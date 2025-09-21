@@ -18,6 +18,11 @@ class CustomSelectorField<T> extends StatelessWidget {
   /// Novo: modo somente leitura
   final bool locked;
 
+  /// Cores personalizáveis
+  final Color backgroundColor; // cor do campo fechado
+  final Color textColor;       // cor do texto/ícone
+  final Color? dropdownColor;  // cor da lista aberta
+
   const CustomSelectorField({
     super.key,
     required this.selectedValue,
@@ -32,6 +37,9 @@ class CustomSelectorField<T> extends StatelessWidget {
     this.focusNode,
     this.onComplete,
     this.locked = false,
+    this.backgroundColor = AppColors.inputBranco,
+    this.textColor = AppColors.textVerde,
+    this.dropdownColor, // novo
   });
 
   @override
@@ -40,7 +48,7 @@ class CustomSelectorField<T> extends StatelessWidget {
       padding: EdgeInsets.symmetric(horizontal: pad),
       child: Theme(
         data: Theme.of(context).copyWith(
-          canvasColor: AppColors.inputBranco,
+          canvasColor: dropdownColor ?? backgroundColor, // aplica no menu
           cardTheme: CardTheme(
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(15.0),
@@ -49,24 +57,29 @@ class CustomSelectorField<T> extends StatelessWidget {
         ),
         child: DropdownButtonHideUnderline(
           child: DropdownButtonFormField<T>(
+            isExpanded: true,
             focusNode: focusNode,
             value: selectedValue,
             items: items,
             onChanged: locked ? null : onChanged,
             onTap: locked ? null : onComplete,
             validator: validador,
-            icon: locked ? const SizedBox.shrink() : null, // <-- remove a seta
+            dropdownColor: dropdownColor ?? backgroundColor, // cor do menu suspenso
+            icon: locked
+                ? const SizedBox.shrink()
+                : Icon(Icons.arrow_drop_down, color: textColor),
             style: TextStyle(
               fontSize: fontSize,
-              color: AppColors.textVerde,
+              color: textColor,
             ),
             decoration: InputDecoration(
               labelText: label,
+              labelStyle: TextStyle(color: textColor),
               hintText: hint,
-              prefixIcon:
-              icon != null ? Icon(icon, color: AppColors.textVerde) : null,
+              hintStyle: TextStyle(color: textColor.withOpacity(0.6)),
+              prefixIcon: icon != null ? Icon(icon, color: textColor) : null,
               filled: true,
-              fillColor: AppColors.inputBranco,
+              fillColor: backgroundColor,
               border: OutlineInputBorder(
                 borderSide: BorderSide.none,
                 borderRadius: BorderRadius.circular(15.0),
