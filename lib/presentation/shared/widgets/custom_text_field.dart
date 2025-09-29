@@ -20,11 +20,13 @@ class CustomTextField extends StatefulWidget {
   final void Function(TimeOfDay time)? onTimePicked;
   final void Function(DateTime date)? onDatePicked;
   final TimeOfDay? initialTime;
+  final Widget? bottom;            // NOVO: conteúdo logo abaixo do campo
+  final double bottomSpacing;      // NOVO: espaço entre campo e bottom
 
   // >>> NOVOS (opcionais)
   final bool? readOnly;          // se null, aplica lógica padrão (data/hora = readOnly)
   final VoidCallback? onTap;     // se null, aplica pickers quando for data/hora
-
+  final ValueChanged<String>? onChanged;
   const CustomTextField({
     super.key,
     required this.ctrl,
@@ -46,7 +48,9 @@ class CustomTextField extends StatefulWidget {
     this.onTimePicked,
     this.onDatePicked,
     this.readOnly,       // novo
-    this.onTap,          // novo
+    this.onTap, this.onChanged,          // novo
+    this.bottom,
+    this.bottomSpacing = 6,
   });
 
   @override
@@ -64,133 +68,148 @@ class _CustomTextFieldState extends State<CustomTextField> {
 
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: widget.pad),
-      child: TextFormField(
-        focusNode: widget.focusNode,
-        controller: widget.ctrl,
-        keyboardType: widget.textInputType,
-        textCapitalization:
-        widget.isPassword ? TextCapitalization.none : TextCapitalization.sentences,
-        maxLength: widget.maxLength > 0 ? widget.maxLength : null,
-        maxLines: widget.maxLines,
-        obscureText: widget.isPassword && !_passVisible,
-        validator: widget.validador,
-        style: TextStyle(fontSize: widget.fontSize, color: AppColors.textVerde),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextFormField(
+            focusNode: widget.focusNode,
+            controller: widget.ctrl,
+            keyboardType: widget.textInputType,
+            textCapitalization:
+            widget.isPassword ? TextCapitalization.none : TextCapitalization.sentences,
+            maxLength: widget.maxLength > 0 ? widget.maxLength : null,
+            maxLines: widget.maxLines,
+            obscureText: widget.isPassword && !_passVisible,
+            validator: widget.validador,
+            style: TextStyle(fontSize: widget.fontSize, color: AppColors.textVerde),
 
-        // >>> READONLY opcional
-        readOnly: effectiveReadOnly,
+            // >>> READONLY opcional
+            readOnly: effectiveReadOnly,
 
-        // >>> ONTAP opcional (se fornecido, usa ele; senão mantém os pickers para data/hora)
-        onTap: widget.onTap ??
-            ((isDateField || widget.isTime)
-                ? () async {
-              if (isDateField) {
-                // --- DATE PICKER ---
-                DateTime initialDate;
-                try {
-                  final parts = widget.ctrl.text.split('/');
-                  if (parts.length == 3) {
-                    final day = int.parse(parts[0]);
-                    final month = int.parse(parts[1]);
-                    final year = int.parse(parts[2]);
-                    initialDate = DateTime(year, month, day);
-                  } else {
-                    initialDate = DateTime.now();
-                  }
-                } catch (_) {
-                  initialDate = DateTime.now();
-                }
-
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: initialDate,
-                  firstDate: DateTime(1900),
-                  lastDate: DateTime(2100),
-                );
-                if (picked != null) {
-                  widget.ctrl.text =
-                  "${picked.day.toString().padLeft(2, '0')}/"
-                      "${picked.month.toString().padLeft(2, '0')}/"
-                      "${picked.year}";
-                  widget.onDatePicked?.call(picked);
-                  widget.onComplete?.call();
-                  FocusScope.of(context).unfocus();
-                }
-              } else if (widget.isTime) {
-                // --- TIME PICKER (24h + HH:mm) ---
-                TimeOfDay initial = widget.initialTime ??
-                    (() {
-                      final t = widget.ctrl.text.trim();
-                      final p = t.split(':');
-                      if (p.length == 2) {
-                        final h = int.tryParse(p[0]);
-                        final m = int.tryParse(p[1]);
-                        if (h != null && m != null) {
-                          return TimeOfDay(hour: h, minute: m);
-                        }
+            // >>> ONTAP opcional (se fornecido, usa ele; senão mantém os pickers para data/hora)
+            onTap: widget.onTap ??
+                ((isDateField || widget.isTime)
+                    ? () async {
+                  if (isDateField) {
+                    // --- DATE PICKER ---
+                    DateTime initialDate;
+                    try {
+                      final parts = widget.ctrl.text.split('/');
+                      if (parts.length == 3) {
+                        final day = int.parse(parts[0]);
+                        final month = int.parse(parts[1]);
+                        final year = int.parse(parts[2]);
+                        initialDate = DateTime(year, month, day);
+                      } else {
+                        initialDate = DateTime.now();
                       }
-                      return TimeOfDay.now();
-                    })();
+                    } catch (_) {
+                      initialDate = DateTime.now();
+                    }
 
-                final picked = await showTimePicker(
-                  context: context,
-                  initialTime: initial,
-                  builder: (ctx, child) {
-                    return MediaQuery(
-                      data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
-                      child: child!,
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: initialDate,
+                      firstDate: DateTime(1900),
+                      lastDate: DateTime(2100),
                     );
-                  },
-                );
+                    if (picked != null) {
+                      widget.ctrl.text =
+                      "${picked.day.toString().padLeft(2, '0')}/"
+                          "${picked.month.toString().padLeft(2, '0')}/"
+                          "${picked.year}";
+                      widget.onDatePicked?.call(picked);
+                      widget.onChanged?.call(widget.ctrl.text);
 
-                if (picked != null) {
-                  final hh = picked.hour.toString().padLeft(2, '0');
-                  final mm = picked.minute.toString().padLeft(2, '0');
-                  widget.ctrl.text = "$hh:$mm";
-                  widget.onTimePicked?.call(picked);
-                  widget.onComplete?.call();
-                  FocusScope.of(context).unfocus();
+                      widget.onComplete?.call();
+                      FocusScope.of(context).unfocus();
+                    }
+                  } else if (widget.isTime) {
+                    // --- TIME PICKER (24h + HH:mm) ---
+                    TimeOfDay initial = widget.initialTime ??
+                        (() {
+                          final t = widget.ctrl.text.trim();
+                          final p = t.split(':');
+                          if (p.length == 2) {
+                            final h = int.tryParse(p[0]);
+                            final m = int.tryParse(p[1]);
+                            if (h != null && m != null) {
+                              return TimeOfDay(hour: h, minute: m);
+                            }
+                          }
+                          return TimeOfDay.now();
+                        })();
+
+                    final picked = await showTimePicker(
+                      context: context,
+                      initialTime: initial,
+                      builder: (ctx, child) {
+                        return MediaQuery(
+                          data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
+                          child: child!,
+                        );
+                      },
+                    );
+
+                    if (picked != null) {
+                      final hh = picked.hour.toString().padLeft(2, '0');
+                      final mm = picked.minute.toString().padLeft(2, '0');
+                      widget.ctrl.text = "$hh:$mm";
+                      widget.onTimePicked?.call(picked);
+                      widget.onChanged?.call(widget.ctrl.text);
+                      widget.onComplete?.call();
+                      FocusScope.of(context).unfocus();
+                    }
+                  }
                 }
-              }
-            }
-                : null),
+                    : null),
 
-        decoration: InputDecoration(
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(
-            vertical: 15,
-            horizontal: 8,
-          ),
-          labelText: widget.label,
-          hintText: widget.hint,
-          prefixIcon: widget.icon != null ? Icon(widget.icon) : null,
-          suffixIcon: widget.isPassword
-              ? IconButton(
-            icon: Icon(
-              _passVisible ? Icons.visibility : Icons.visibility_off,
-              color: AppColors.textVerde,
+            decoration: InputDecoration(
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                vertical: 15,
+                horizontal: 8,
+              ),
+              labelText: widget.label,
+              hintText: widget.hint,
+              prefixIcon: widget.icon != null ? Icon(widget.icon) : null,
+              suffixIcon: widget.isPassword
+                  ? IconButton(
+                icon: Icon(
+                  _passVisible ? Icons.visibility : Icons.visibility_off,
+                  color: AppColors.textVerde,
+                ),
+                onPressed: () => setState(() => _passVisible = !_passVisible),
+              )
+                  : null,
+              filled: true,
+              fillColor: AppColors.inputBranco,
+              border: OutlineInputBorder(
+                borderSide: BorderSide.none,
+                borderRadius: BorderRadius.circular(15.0),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderSide: BorderSide.none,
+                borderRadius: BorderRadius.circular(15.0),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide.none,
+                borderRadius: BorderRadius.circular(15.0),
+              ),
             ),
-            onPressed: () => setState(() => _passVisible = !_passVisible),
-          )
-              : null,
-          filled: true,
-          fillColor: AppColors.inputBranco,
-          border: OutlineInputBorder(
-            borderSide: BorderSide.none,
-            borderRadius: BorderRadius.circular(15.0),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderSide: BorderSide.none,
-            borderRadius: BorderRadius.circular(15.0),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderSide: BorderSide.none,
-            borderRadius: BorderRadius.circular(15.0),
-          ),
-        ),
+            onChanged: widget.onChanged,
 
-        onEditingComplete: widget.onComplete,
-        onTapOutside: widget.onTapOutside,
+            onEditingComplete: widget.onComplete,
+            onTapOutside: widget.onTapOutside,
+          ),
+
+          if (widget.bottom != null) SizedBox(height: widget.bottomSpacing),
+
+          // >>> aqui entra sua “lista de sugestões” embutida
+          if (widget.bottom != null) widget.bottom!,
+        ],
       ),
+
     );
   }
 }

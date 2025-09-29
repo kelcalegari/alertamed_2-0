@@ -110,7 +110,6 @@ class ProximosTratamentosCard extends StatelessWidget {
                         onAdiar: (novaDataHora) async {
                           await LembreteService().adiarLembrete(
                             context: context,
-                            idUsuario: userId,
                             idLembrete: idLembrete,
                             novaDataHora: novaDataHora,
                           );
@@ -119,7 +118,7 @@ class ProximosTratamentosCard extends StatelessWidget {
                         },
                         onPular: () async {
                           await LembreteService().pularLembrete(
-                            idUsuario: userId,
+
                             idLembrete: idLembrete,
                             context: context,
                           );

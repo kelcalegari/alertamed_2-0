@@ -49,7 +49,7 @@ class CustomSelectorField<T> extends StatelessWidget {
       child: Theme(
         data: Theme.of(context).copyWith(
           canvasColor: dropdownColor ?? backgroundColor, // aplica no menu
-          cardTheme: CardTheme(
+          cardTheme: CardThemeData(
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(15.0),
             ),

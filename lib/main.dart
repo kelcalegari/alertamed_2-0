@@ -4,6 +4,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:smartmed/presentation/routes/routes.dart';
 import 'package:smartmed/providers/user_data_provider.dart';
+import 'package:workmanager/workmanager.dart';
+import 'core/services/bg_sync.dart';
 import 'core/services/notification_service.dart';
 import 'firebase_options.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -21,7 +23,10 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   await NotificationService().init();
-
+  await Workmanager().initialize(
+    bgCallbackDispatcher,
+    isInDebugMode: false, // true para testes (logs)
+  );
   runApp(
     MultiProvider(
       providers: [

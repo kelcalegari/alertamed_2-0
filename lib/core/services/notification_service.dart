@@ -117,7 +117,6 @@ void _onActionReceived(NotificationResponse response) async {
       await lembreteService.pularLembrete(
         context: context,
         idLembrete: idLembrete,
-        idUsuario: idUsuario,
       );
       await usuarioProvider.fetchData();
       break;
@@ -126,7 +125,6 @@ void _onActionReceived(NotificationResponse response) async {
       await lembreteService.adiarLembrete(
         context: context,
         idLembrete: idLembrete,
-        idUsuario: idUsuario,
         novaDataHora: novaHora,
       );
       ScaffoldMessenger.of(context).showSnackBar(

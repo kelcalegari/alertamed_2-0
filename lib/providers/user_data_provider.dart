@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../core/services/bg_sync.dart';
+import '../core/services/notification_service.dart';
+
 /// Provider responsável por separar dados do usuário logado (self)
 /// e do usuário em contexto (paciente atual) + controle de permissões.
 ///
@@ -36,6 +39,10 @@ class UsuarioProvider extends ChangeNotifier {
   String? _contextoUsuarioId;
   String get contextoUsuarioId => _contextoUsuarioId ?? userId;
   bool get isContextoSouEu => contextoUsuarioId == userId;
+
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subPendLembretes;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subPendTratamentos;
+
 
   // ---- Permissões do contexto (resumo) ----
   // Scopes que o LOGADO tem sobre o PACIENTE EM CONTEXTO (quando contexto != self)
@@ -105,7 +112,10 @@ class UsuarioProvider extends ChangeNotifier {
 
       // 2) Carrega CONTEXTO (dados + permissões)
       await _fetchContextoData(ctxUid);
+
     } finally {
+      _stopPendingListeners();
+      if (isContextoSouEu) _startPendingListeners();
       isLoading = false;
       notifyListeners();
     }
@@ -131,11 +141,29 @@ class UsuarioProvider extends ChangeNotifier {
       notifyListeners();
     }
   }
+  Future<void> onLogin() async {
+    // ... sua lógica
+    if (isContextoSouEu && userId.isNotEmpty) {
+      await BgSync.register(pacienteUid: userId);
+    }
+    fetchData();
+  }
+
+  Future<void> logout() async {
+
+    await BgSync.cancelAll();
+
+    clearState();
+  }
 
   Future<void> setContextoUsuario(String uid, {bool persist = true}) async {
     if (_contextoUsuarioId == uid) return;
 
     _contextoUsuarioId = uid;
+    await BgSync.cancelAll();
+    if (isContextoSouEu && uid.isNotEmpty) {
+      await BgSync.register(pacienteUid: uid);
+    }
     notifyListeners();
 
     await _fetchContextoData(uid);
@@ -147,6 +175,8 @@ class UsuarioProvider extends ChangeNotifier {
         debugPrint('Erro ao persistir contextoUsuarioId: $e');
       }
     }
+    _stopPendingListeners();
+    if (isContextoSouEu) _startPendingListeners();
   }
 
   Future<void> _loadNomePublico(String uid) async {
@@ -198,8 +228,174 @@ class UsuarioProvider extends ChangeNotifier {
     isLoadingContexto = false;
 
     _contextoUsuarioId = null;
-
+    _stopPendingListeners();
     notifyListeners();
+  }
+
+  // ✅ Deixe a função aceitar nulo e trate campos ausentes
+  String notifBodyFromTrat(Map<String, dynamic>? t) {
+    if (t == null) return 'Lembrete de medicamento';
+
+    final nome = (t['nomeMedicamento'] ?? '').toString().trim();
+    final conc = (t['concentracaoMedicamento'] ?? '').toString().trim();
+
+    // use o que você realmente salva no Firestore:
+    // se usa 'qtdMedicamento' e 'unidadeMedida', caia neles;
+    // se o seu doc tiver 'dosagem', também cobre.
+    final dose = (t['qtdMedicamento'] ?? t['dosagem'] ?? '').toString().trim();
+    final un   = (t['unidadeMedida'] ?? '').toString().trim();
+
+    if (nome.isNotEmpty && conc.isNotEmpty && dose.isNotEmpty && un.isNotEmpty) {
+      return '$nome $conc ($dose $un)';
+    }
+    if (nome.isNotEmpty && conc.isNotEmpty) return '$nome $conc';
+    if (nome.isNotEmpty) return nome;
+
+    return 'Lembrete de medicamento';
+  }
+
+  /// Busca um tratamento específico direto do servidor (opção padrão),
+  /// atualiza o cache local (tratamentosMap) se `updateProvider` = true
+  /// e retorna o mapa do tratamento (ou null se não existir).
+  Future<Map<String, dynamic>?> getTratamentoFresh(
+      String idTratamento, {
+        bool updateProvider = true,
+        bool preferServer = true, // se false, tenta cache e cai pro server
+      }) async {
+    if (contextoUsuarioId.isEmpty || idTratamento.isEmpty) return null;
+
+    final docRef = _usersCol
+        .doc(contextoUsuarioId)
+        .collection('tratamentos')
+        .doc(idTratamento);
+
+    try {
+      // Tenta servidor primeiro (evita retornar dado velho do cache)
+      final doc = await docRef.get(
+        preferServer
+            ? const GetOptions(source: Source.server)
+            : const GetOptions(source: Source.cache),
+      );
+
+      // Se preferiu cache e não achou, tenta o servidor como fallback
+      final snapshot = (doc.exists || preferServer)
+          ? doc
+          : await docRef.get(const GetOptions(source: Source.server));
+
+      if (!snapshot.exists || snapshot.data() == null) {
+        return null;
+      }
+
+      final data = snapshot.data()!;
+      data['idTratamento'] = snapshot.id;
+
+      if (updateProvider) {
+        tratamentosMap[idTratamento] = data;
+        notifyListeners();
+      }
+
+      return data;
+    } catch (e) {
+      debugPrint('getTratamentoFresh erro: $e');
+
+      // Fallback final: tenta cache se o server falhar (offline, etc.)
+      try {
+        final cacheDoc =
+        await docRef.get(const GetOptions(source: Source.cache));
+        if (cacheDoc.exists && cacheDoc.data() != null) {
+          final data = cacheDoc.data()!;
+          data['idTratamento'] = cacheDoc.id;
+          if (updateProvider) {
+            tratamentosMap[idTratamento] = data;
+            notifyListeners();
+          }
+          return data;
+        }
+      } catch (_) {}
+      return null;
+    }
+  }
+
+
+  void _startPendingListeners() {
+    // só no próprio contexto (um device por usuário)
+    if (!isContextoSouEu || contextoUsuarioId.isEmpty) return;
+
+    final colL = FirebaseFirestore.instance
+        .collection('usuarios').doc(contextoUsuarioId)
+        .collection('lembretes')
+        .where('pendingSync', isEqualTo: true);
+
+    _subPendLembretes?.cancel();
+    _subPendLembretes = colL.snapshots().listen((qs) async {
+      final notif = NotificationService();
+      for (final d in qs.docs) {
+        final m = d.data();
+
+        // cancelar/agendar conforme status
+        if (m['adiado'] == true || m['cancelado'] == true) {
+          final int? idN = m['idNotificacao'] as int?;
+          if (idN != null) {
+            try { await notif.cancelNotification(idN); } catch (_) {}
+          }
+        } else {
+          // (re)agenda
+          final int? idN = m['idNotificacao'] as int?;
+          final ts = m['dataHoraAgendado'] as Timestamp?;
+          if (idN != null && ts != null) {
+            final trat = await getTratamentoFresh(
+              (m['idTratamento'] ?? '').toString(),
+              updateProvider: false,
+              preferServer: true,
+            );
+            final body = notifBodyFromTrat(trat);
+            try {
+              await notif.scheduleNotification(
+                id: idN,
+                title: 'Hora do medicamento',
+                body: body,
+                scheduledDateTime: ts.toDate(),
+                idLembrete: d.id,
+                idUsuario: contextoUsuarioId,
+              );
+            } catch (_) {}
+          }
+        }
+
+        // marca sincronizado
+        await d.reference.update({
+          'pendingSync': false,
+          'classSync': "provider_sync",
+          'lastSyncedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    });
+
+    // Se você deriva lembretes a partir de tratamentos, habilite também:
+    final colT = FirebaseFirestore.instance
+        .collection('usuarios').doc(contextoUsuarioId)
+        .collection('tratamentos')
+        .where('pendingSync', isEqualTo: true);
+
+    _subPendTratamentos?.cancel();
+    _subPendTratamentos = colT.snapshots().listen((qs) async {
+      for (final d in qs.docs) {
+        final t = d.data();
+        // Se precisar criar/atualizar lembretes locais a partir do tratamento, faça aqui.
+        // Caso contrário, basta marcar como sincronizado:
+        await d.reference.update({
+          'pendingSync': false,
+          'lastSyncedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    });
+  }
+
+  void _stopPendingListeners() {
+    _subPendLembretes?.cancel();
+    _subPendTratamentos?.cancel();
+    _subPendLembretes = null;
+    _subPendTratamentos = null;
   }
 
   // ========================= LOADERS SELF =========================

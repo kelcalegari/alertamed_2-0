@@ -24,7 +24,7 @@ class LoginService {
         email: emailController.text.trim(),
         password: passwordController.text,
       );
-      context.read<UsuarioProvider>().fetchData();
+      context.read<UsuarioProvider>().onLogin();
 
       Navigator.pushReplacementNamed(context, Routes.home);
     } on FirebaseAuthException catch (e) {

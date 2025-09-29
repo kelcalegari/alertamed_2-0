@@ -56,6 +56,26 @@ class SalvarTratamento {
 
   // ------------------- Utils & Helpers -------------------
 
+
+// UID alvo para gravação: se for self => userId; se for paciente em contexto => contextoUsuarioId
+  String get _targetUid {
+    final ctx = (usuarioProvider.contextoUsuarioId ?? '').trim();
+    return usuarioProvider.isContextoSouEu ? usuarioProvider.userId : ctx;
+  }
+
+// segurança: evita gravar em vazio quando estiver no contexto do paciente
+  void _assertTargetUid() {
+    if (!usuarioProvider.isContextoSouEu && (_targetUid.isEmpty)) {
+      throw Exception('Contexto de paciente sem UID definido (contextoUsuarioId vazio).');
+    }
+  }
+
+  Map<String, dynamic> _updatedBy(String role) => {
+    'uid': usuarioProvider.userId,
+    'role': role, // 'patient' ou 'caregiver'
+  };
+
+
   int _parseIntSafe(String s, {int fallback = 0}) {
     final v = int.tryParse(s.trim());
     return v == null ? fallback : v;
@@ -95,6 +115,44 @@ class SalvarTratamento {
     } catch (_) {
       return DateTime(baseDate.year, baseDate.month, baseDate.day, 8, 0); // fallback 08:00
     }
+  }
+// ADD: helper para inferir 'cafe' | 'almoco' | 'jantar' a partir do horário do dia
+  String? _inferirMomentoRefeicao(DateTime dt, List<dynamic>? horariosRefeicoesProvider) {
+    if (horariosRefeicoesProvider == null || refeicoesSelecionadas.isEmpty) return null;
+
+    final chaveDia = _diaSemanaPTBR(dt);
+    final cfgDia = _obterConfigDoDia(horariosRefeicoesProvider, chaveDia);
+
+    // monta mapa refeicao -> HH:mm (com fallback)
+    final mapaMomento = <String, String>{
+      'cafe':   ((cfgDia?['horaCafe']   ?? '').toString().trim().isEmpty) ? '07:30' : (cfgDia?['horaCafe']   ?? '').toString().trim(),
+      'almoco': ((cfgDia?['horaAlmoco'] ?? '').toString().trim().isEmpty) ? '12:00' : (cfgDia?['horaAlmoco'] ?? '').toString().trim(),
+      'jantar': ((cfgDia?['horaJanta']  ?? '').toString().trim().isEmpty) ? '19:00' : (cfgDia?['horaJanta']  ?? '').toString().trim(),
+    };
+
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    final hhmm = '$hh:$mm';
+
+    // considera apenas as refeições escolhidas neste tratamento
+    for (final r in refeicoesSelecionadas) {
+      if (mapaMomento[r] == hhmm) return r; // bateu exato
+    }
+
+    // (opcional) tolerância de 1–2 minutos se houver arredondamentos
+    int toMin(String s) {
+      final d = _parseHHmm(s);
+      return d == null ? -1 : d.inMinutes;
+    }
+    final alvo = toMin(hhmm);
+    if (alvo >= 0) {
+      for (final r in refeicoesSelecionadas) {
+        final m = toMin(mapaMomento[r] ?? '');
+        if (m >= 0 && ( (alvo - m).abs() <= 2 ) ) return r;
+      }
+    }
+
+    return null;
   }
 
   /// Normaliza rótulos de dias para chaves canônicas
@@ -398,7 +456,7 @@ class SalvarTratamento {
 
     final result = <DateTime>[];
     final agora = DateTime.now();
-    final limite = agora.add(const Duration(minutes: 10));
+    final limite = agora.add(const Duration(minutes: 1));
 
     int diaOffset = 0;
     while (result.length < totalDoses) {
@@ -440,7 +498,8 @@ class SalvarTratamento {
 
   // ------------------- Fluxo principal -------------------
   Future<void> criarTratamentoComLembretes() async {
-    final idUsuario = usuarioProvider.userId;
+    _assertTargetUid();
+    final idUsuario = _targetUid;
 
     // 1) Calcula o plano pelo Map
     final plano = _calcularPlanoLembretesMap();
@@ -480,6 +539,10 @@ class SalvarTratamento {
       'tipoFrequencia': tipoFrequencia,
       'renovacaoAutomatica': isContinuo,
       'janelaDias': isContinuo ? janelaPreGeracaoDias : null,
+      'scheduleVersion': 1,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedBy': _updatedBy(usuarioProvider.isContextoSouEu ? 'patient' : 'caregiver'),
+      'pendingSync': usuarioProvider.isContextoSouEu ? false : true,
     };
 
     await firestore
@@ -582,7 +645,8 @@ class SalvarTratamento {
 
 
   Future<void> atualizarTratamento({required String idTratamento}) async {
-    final idUsuario = usuarioProvider.userId;
+    _assertTargetUid();
+    final idUsuario = _targetUid;
     final docTrat = firestore
         .collection('usuarios').doc(idUsuario)
         .collection('tratamentos').doc(idTratamento);
@@ -622,7 +686,10 @@ class SalvarTratamento {
       'lembretes': resumo,
       'renovacaoAutomatica': isContinuo,
       'janelaDias': isContinuo ? janelaPreGeracaoDias : null,
+      'scheduleVersion': FieldValue.increment(1),
       'updatedAt': FieldValue.serverTimestamp(),
+      'updatedBy': _updatedBy(usuarioProvider.isContextoSouEu ? 'patient' : 'caregiver'),
+      'pendingSync': usuarioProvider.isContextoSouEu ? false : true,
     };
 
     // 3) Atualiza tratamento
@@ -733,8 +800,8 @@ class SalvarTratamento {
         }
       } else {
         final int freqHoras = _parseIntSafe(frequenciaHoras, fallback: 8);
-        final nowPlus10 = DateTime.now().add(const Duration(minutes: 10));
-        final inicio = dataHoraInicioIntervalo.isBefore(nowPlus10) ? nowPlus10 : dataHoraInicioIntervalo;
+        final nowPlus1 = DateTime.now().add(const Duration(minutes: 1));
+        final inicio = dataHoraInicioIntervalo.isBefore(nowPlus1) ? nowPlus1 : dataHoraInicioIntervalo;
 
         datasLembretes = List.generate(
           totalDoses,
@@ -758,7 +825,7 @@ class SalvarTratamento {
     required String idTratamento,
     required List<DateTime> datasLembretes,
   }) async {
-    final notificationService = NotificationService();
+
 
     // limpa antigos (útil na edição)
     final antigos = await firestore
@@ -773,50 +840,55 @@ class SalvarTratamento {
 
     // cria novos + notifica
     final List<Future<void>> pend = [];
-    for (final dataLembrete in datasLembretes) {
-      final String idLembrete = firestore
+
+    final horariosRefeicoesProvider = usuarioProvider.horariosRefeicoes;
+    final bool isRefeicao =
+        tipoFrequencia == 'Junto com Refeições' && refeicoesSelecionadas.isNotEmpty;
+    for (final dt in datasLembretes) {
+      final doc = firestore
           .collection('usuarios').doc(idUsuario)
-          .collection('lembretes').doc().id;
+          .collection('lembretes').doc();
 
-      final int idNotificacao = idLembrete.hashCode.abs();
+      final idNotif = doc.id.hashCode.abs(); // usa como ID local determinístico
 
-      final lembreteDoc = {
+      final String? momentoInferido = isRefeicao
+          ? _inferirMomentoRefeicao(dt, horariosRefeicoesProvider)
+          : null;
+      final lembrete = {
         'idTratamento': idTratamento,
-        'idNotificacao': idNotificacao,
-        'dataHoraAgendado': Timestamp.fromDate(dataLembrete),
+        'dataHoraAgendado': Timestamp.fromDate(dt),
         'dataHoraTomado': null,
         'tomado': false,
         'adiado': false,
+        'cancelado': false,
         'notificado': false,
         'idNovoLembrete': '',
-        'tipoTratamento': tipoTratamento ?? '',
+        'refeicao': momentoInferido,
+        'momento': null,         // idem
+        'idNotificacao': idNotif,
+        'tipoTratamento': tipoTratamento,
         'tipoFrequencia': tipoFrequencia,
-        'refeicao': '', // se quiser preencher café/almoco/jantar, dá pra inferir aqui
-        'momento': '',
-        'cancelado': false,
+
+        // NOVO:
+        'scheduleVersion': 1,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedBy': _updatedBy(usuarioProvider.isContextoSouEu ? 'patient' : 'caregiver'),
+        'pendingSync': usuarioProvider.isContextoSouEu ? false : true,
+        'status': 'ativo',
       };
 
-      pend.add(
-        firestore
-            .collection('usuarios').doc(idUsuario)
-            .collection('lembretes').doc(idLembrete)
-            .set(lembreteDoc),
-      );
+      await doc.set(lembrete);
 
-      pend.add(
-        notificationService.scheduleNotification(
-          id: idNotificacao,
+      if (usuarioProvider.isContextoSouEu) {
+        // agenda no device do paciente imediatamente
+        await NotificationService().scheduleNotification(
+          id: idNotif,
           title: 'Hora do medicamento',
-          body: '$nomeMedicamento $concentracaoMedicamento '
-              '(${qtdMedicamento} $unidadeMedida)',
-          scheduledDateTime: dataLembrete,
-          idLembrete: idLembrete,
+          body: '${nomeMedicamento} ${concentracaoMedicamento} ($qtdMedicamento $unidadeMedida)',
+          scheduledDateTime: dt,
+          idLembrete: doc.id,
           idUsuario: idUsuario,
-        ),
-      );
+        );
+      }
     }
-
-    await Future.wait(pend);
-  }
-
-}
+}}

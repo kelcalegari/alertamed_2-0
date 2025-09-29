@@ -149,7 +149,11 @@ class InformacaoTratamento extends StatelessWidget {
     final horariosFixos = isFixos ? _formatHorariosFixos(tratamento) : const <String>[];
     final refeicoes = isRef ? _formatRefeicoes(tratamento) : const <String>[];
     final intervalo = isIntervalo ? _formatIntervalo(tratamento) : null;
+    final bool hasEstoque = estoque != null;
 
+    final bool podeEditarOuConcluir =
+        (usuarioProvider.isContextoSouEu && !usuarioProvider.bloquearEdicaoPorPoliticaDoCuidador) ||
+            (!usuarioProvider.isContextoSouEu && !usuarioProvider.isPacienteComVisualizacao);
     return GestureDetector(
       onVerticalDragUpdate: (details) {
         if (details.primaryDelta != null && details.primaryDelta! > 10) {
@@ -158,8 +162,8 @@ class InformacaoTratamento extends StatelessWidget {
       },
       child: Container(
         height: mediaQuery.size.height,
-        decoration: const BoxDecoration(
-          color: AppColors.cardBackgroundBranco,
+        decoration:  BoxDecoration(
+          color: hasEstoque ? AppColors.cardBackgroundVerde: AppColors.cardBackgroundBranco,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
         child: SingleChildScrollView(
@@ -204,7 +208,7 @@ class InformacaoTratamento extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
+
 
               // ---------- Card do tratamento atual ----------
               Container(
@@ -317,7 +321,7 @@ class InformacaoTratamento extends StatelessWidget {
                 ),
               ),
 
-              // ---------- Card de estoque ----------
+              if (hasEstoque)
               Container(
                 decoration: const BoxDecoration(
                   color: AppColors.cardBackgroundVerde,
@@ -372,13 +376,13 @@ class InformacaoTratamento extends StatelessWidget {
               ),
               if ((usuarioProvider.isContextoSouEu && !usuarioProvider.bloquearEdicaoPorPoliticaDoCuidador) || (!usuarioProvider.isContextoSouEu && !usuarioProvider.isPacienteComVisualizacao ))
               Container(
-                decoration: const BoxDecoration(
-                  color: AppColors.cardBackgroundBranco,
+                decoration: BoxDecoration(
+                  color: hasEstoque ? AppColors.cardBackgroundBranco: AppColors.cardBackgroundVerde,
                 ),
                 child: Container(
-                  decoration: const BoxDecoration(
-                    color: AppColors.cardBackgroundVerde,
-                    borderRadius: BorderRadius.vertical(
+                  decoration: BoxDecoration(
+                    color: hasEstoque ? AppColors.cardBackgroundVerde: AppColors.cardBackgroundBranco,
+                    borderRadius: const BorderRadius.vertical(
                       top: Radius.circular(20),
                     ),
                   ),
@@ -392,17 +396,17 @@ class InformacaoTratamento extends StatelessWidget {
                           width: double.infinity,
                           child: ElevatedButton(
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.botoesBrancos,
+                              backgroundColor: hasEstoque ? AppColors.botoesBrancos: AppColors.botoesVerdes,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(30),
                               ),
                             ),
                             onPressed: () => onEditar(tratamento['idTratamento'] as String),
-                            child: const Text(
+                            child: Text(
                               'Editar',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: AppColors.textVerde,
+                                color: hasEstoque ? AppColors.textVerde: AppColors.textBranco,
                               ),
                             ),
                           ),
@@ -411,7 +415,7 @@ class InformacaoTratamento extends StatelessWidget {
                           width: double.infinity,
                           child: ElevatedButton(
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.botoesBrancos,
+                              backgroundColor: hasEstoque ? AppColors.botoesBrancos: AppColors.botoesVerdes,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(30),
                               ),
@@ -419,11 +423,11 @@ class InformacaoTratamento extends StatelessWidget {
                             onPressed: () async {await LembreteService().finalizarTratamento(context: context, idUsuario: idUsuario, idTratamento: tratamento['idTratamento']);
                             onCancel();
                             },
-                            child: const Text(
+                            child:  Text(
                               'Concluir Tratamento',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: AppColors.textVerde,
+                                color: hasEstoque ? AppColors.textVerde: AppColors.textBranco,
                               ),
                             ),
                           ),
@@ -432,17 +436,17 @@ class InformacaoTratamento extends StatelessWidget {
                           width: double.infinity,
                           child: ElevatedButton(
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.botoesBrancos,
+                              backgroundColor: hasEstoque ? AppColors.botoesBrancos: AppColors.botoesVerdes,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(30),
                               ),
                             ),
                             onPressed: onCancel,
-                            child: const Text(
+                            child: Text(
                               'Compartilhar com Cuidador',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: AppColors.textVerde,
+                                color: hasEstoque ? AppColors.textVerde: AppColors.textBranco,
                               ),
                             ),
                           ),

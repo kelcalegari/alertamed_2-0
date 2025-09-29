@@ -265,7 +265,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
                       icon: Icon(Icons.logout, color: AppColors.textVerde),
                       onPressed: () async {
                         await FirebaseAuth.instance.signOut();
-                        context.read<UsuarioProvider>().clearState();
+                        context.read<UsuarioProvider>().logout();
                         if (!mounted) return;
                         Navigator.pushNamed(context, Routes.onboarding);
                       },
