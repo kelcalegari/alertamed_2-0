@@ -1,95 +1,163 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../../../../providers/user_data_provider.dart';
 
+/// ===== Helpers base (timeout + net error) =====
+bool _isNetworkError(Object e) {
+  if (e is FirebaseException) {
+    return e.code == 'unavailable' ||
+        e.code == 'network-request-failed' ||
+        e.code == 'deadline-exceeded';
+  }
+  return false;
+}
+
+Future<bool> _tryWrite(Future<void> Function() op, {Duration timeout = const Duration(seconds: 2)}) async {
+  try {
+    await op().timeout(timeout);
+    return true;
+  } on TimeoutException {
+    return false;
+  } catch (e) {
+    if (_isNetworkError(e)) return false;
+    rethrow;
+  }
+}
+
+/// ===== Regras de alvo =====
+/// Somente o usuário local pode registrar/editar sintomas.
+/// Se vier provider em contexto "paciente" (caregiver), bloqueia.
+String _resolveTargetUid(UsuarioProvider? p, User? authUser) {
+  if (authUser == null) throw Exception('Usuário não autenticado');
+  if (p != null && !p.isContextoSouEu) {
+    throw Exception('Apenas o usuário local pode registrar sintomas.');
+  }
+  return authUser.uid;
+}
+
+/// Metadados simples (sempre paciente/local)
+Map<String, dynamic> _updatedBy(User? authUser) {
+  final uid = authUser?.uid ?? '';
+  return {'uid': uid, 'role': 'patient'};
+}
+
+/// ===== SALVAR =====
 Future<void> salvarSintomas({
   required String nome,
   required String intensidade,
   required String observacoes,
+  UsuarioProvider? usuarioProvider,
+  Duration writeTimeout = const Duration(seconds: 2),
 }) async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) throw Exception('Usuário não autenticado');
+  final authUser = FirebaseAuth.instance.currentUser;
+  final idUsuario = _resolveTargetUid(usuarioProvider, authUser);
 
-  final idUsuario = user.uid;
   final sintomasRef = FirebaseFirestore.instance
       .collection('usuarios')
       .doc(idUsuario)
       .collection('sintomas')
-      .doc(); // id automático
+      .doc(); // id “online”
 
-  await sintomasRef.set({
+  final agoraLocal = Timestamp.now();
+
+  // Mantém 'dataHoraLocal' para a janela offline; 'dataHora' como serverTimestamp.
+  final baseDoc = <String, dynamic>{
     'nome': nome,
     'intensidade': intensidade.toLowerCase(),
     'observacoes': observacoes,
-    'dataHora': Timestamp.now(),
-    // campos auxiliares
-    'ultimaEdicao': null,               // Timestamp? (nulo até 1ª edição)
-    'historicoEdicoes': <Map<String, dynamic>>[], // lista de logs
-  });
+    'dataHora': FieldValue.serverTimestamp(),
+    'dataHoraLocal': agoraLocal,
+    'ultimaEdicao': null,
+    'historicoEdicoes': <Map<String, dynamic>>[],
+    'updatedAt': FieldValue.serverTimestamp(),
+    'updatedBy': _updatedBy(authUser),
+    'status': 'ativo',
+  };
+
+  final wroteOnline = await _tryWrite(
+        () async => await sintomasRef.set(baseDoc),
+    timeout: writeTimeout,
+  );
+
+  if (!wroteOnline) {
+    // Offline: garante 'dataHora' já preenchido para a janela
+    final localDoc = Map<String, dynamic>.from(baseDoc)
+      ..['dataHora'] = agoraLocal
+      ..['__localId'] = 'local_${sintomasRef.id}';
+
+    // Coloca no cache (merge) sem travar
+    unawaited(sintomasRef.set(localDoc, SetOptions(merge: true)));
+
+    // Atualiza provider para refletir na UI (se foi passado)
+    if (usuarioProvider != null) {
+      usuarioProvider.sintomas.add(localDoc);
+      usuarioProvider.notifyListeners();
+    }
+  }
 }
 
-/// Retorna true se ainda está dentro da janela de 15 minutos.
-Future<bool> podeEditarSintoma(String sintomaId) async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) throw Exception('Usuário não autenticado');
+/// ===== PODE EDITAR =====
+Future<bool> podeEditarSintoma(String sintomaId, {UsuarioProvider? usuarioProvider}) async {
+  final authUser = FirebaseAuth.instance.currentUser;
+  final idUsuario = _resolveTargetUid(usuarioProvider, authUser);
 
-  final doc = await FirebaseFirestore.instance
-      .collection('usuarios')
-      .doc(user.uid)
-      .collection('sintomas')
-      .doc(sintomaId)
-      .get();
+  final snap = await FirebaseFirestore.instance
+      .collection('usuarios').doc(idUsuario)
+      .collection('sintomas').doc(sintomaId)
+      .get(const GetOptions(source: Source.serverAndCache));
 
-  if (!doc.exists) return false;
+  if (!snap.exists) return false;
+  final data = snap.data()!;
+  final Timestamp? criadoServer = data['dataHora'] as Timestamp?;
+  final Timestamp? criadoLocal  = data['dataHoraLocal'] as Timestamp?;
 
-  final data = doc.data()!;
-  final Timestamp criadoEm = data['dataHora'] as Timestamp;
-  final limite = criadoEm.toDate().add(const Duration(minutes: 15));
+  final criadoEm = (criadoServer ?? criadoLocal)?.toDate();
+  if (criadoEm == null) return false;
+
+  final limite = criadoEm.add(const Duration(minutes: 15));
   return DateTime.now().isBefore(limite);
 }
 
-/// Edita campos do sintoma apenas se estiver dentro de 15 minutos do registro.
-/// Passa só os campos que quer alterar; os demais ficam como estão.
+/// ===== EDITAR =====
 Future<void> editarSintoma({
   required String sintomaId,
   String? nome,
   String? intensidade,
   String? observacoes,
+  UsuarioProvider? usuarioProvider,
+  Duration writeTimeout = const Duration(seconds: 2),
 }) async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) throw Exception('Usuário não autenticado');
+  final authUser = FirebaseAuth.instance.currentUser;
+  final idUsuario = _resolveTargetUid(usuarioProvider, authUser);
 
-  // 1) Carrega doc atual
   final docRef = FirebaseFirestore.instance
-      .collection('usuarios')
-      .doc(user.uid)
-      .collection('sintomas')
-      .doc(sintomaId);
+      .collection('usuarios').doc(idUsuario)
+      .collection('sintomas').doc(sintomaId);
 
-  final snap = await docRef.get();
-  if (!snap.exists) {
-    throw Exception('Sintoma não encontrado');
-  }
+  final snap = await docRef.get(const GetOptions(source: Source.serverAndCache));
+  if (!snap.exists) throw Exception('Sintoma não encontrado');
 
   final atual = snap.data()!;
-  final criadoEm = (atual['dataHora'] as Timestamp).toDate();
+  final criadoServer = atual['dataHora'] as Timestamp?;
+  final criadoLocal  = atual['dataHoraLocal'] as Timestamp?;
+  final criadoEm = (criadoServer ?? criadoLocal)?.toDate();
+  if (criadoEm == null) throw Exception('Registro inválido (sem dataHora)');
+
   final limite = criadoEm.add(const Duration(minutes: 15));
   if (DateTime.now().isAfter(limite)) {
     throw Exception('Edição não permitida: prazo de 15 minutos expirou');
   }
 
-  // 2) Monta atualização somente com o que veio
   final updates = <String, dynamic>{};
   if (nome != null) updates['nome'] = nome;
   if (intensidade != null) updates['intensidade'] = intensidade.toLowerCase();
   if (observacoes != null) updates['observacoes'] = observacoes;
+  if (updates.isEmpty) return;
 
-  if (updates.isEmpty) {
-    return; // nada para editar
-  }
-
-  // 3) Opcional: registra um pequeno log da edição (antes/depois)
+  // ⚠️ AQUI ESTAVA O PROBLEMA: NÃO usar FieldValue.serverTimestamp() DENTRO do arrayUnion
   final logItem = {
-    'em': Timestamp.now(),
+    'em': Timestamp.now(), // <- use Timestamp.now() no item do log
     'antes': {
       'nome': atual['nome'],
       'intensidade': atual['intensidade'],
@@ -102,9 +170,44 @@ Future<void> editarSintoma({
     },
   };
 
-  updates['ultimaEdicao'] = Timestamp.now();
+  updates['ultimaEdicao'] = FieldValue.serverTimestamp(); // ok (campo de topo)
+  updates['updatedAt'] = FieldValue.serverTimestamp();    // ok (campo de topo)
+  updates['updatedBy'] = _updatedBy(authUser);
   updates['historicoEdicoes'] = FieldValue.arrayUnion([logItem]);
 
-  // 4) Atualiza
-  await docRef.update(updates);
+  final wroteOnline = await _tryWrite(
+        () async => await docRef.update(updates),
+    timeout: writeTimeout,
+  );
+
+  if (!wroteOnline) {
+    // Fallback local (também SEM sentinel aninhado)
+    final local = Map<String, dynamic>.from(updates)
+      ..['ultimaEdicao'] = Timestamp.now()
+      ..['historicoEdicoes'] = FieldValue.arrayUnion([
+        {
+          'em': Timestamp.now(),
+          'antes': logItem['antes'],
+          'depois': logItem['depois'],
+        }
+      ]);
+
+    unawaited(docRef.set(local, SetOptions(merge: true)));
+
+    if (usuarioProvider != null) {
+      final lista = usuarioProvider.sintomas;
+      final idx = lista.indexWhere((e) => (e['id'] ?? e['__localId'] ?? '') == sintomaId);
+      if (idx >= 0) {
+        final m = Map<String, dynamic>.from(lista[idx] as Map);
+        m.addAll({
+          'nome': updates['nome'] ?? m['nome'],
+          'intensidade': updates['intensidade'] ?? m['intensidade'],
+          'observacoes': updates['observacoes'] ?? m['observacoes'],
+          'ultimaEdicao': Timestamp.now(),
+        });
+        lista[idx] = m;
+      }
+      usuarioProvider.notifyListeners();
+    }
+  }
 }

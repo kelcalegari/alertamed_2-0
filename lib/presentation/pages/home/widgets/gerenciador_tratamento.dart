@@ -553,7 +553,7 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
           (val) => setState(() => _selectedUnidadesMedida = val),
       onCompartilharTratamentoChanged:
           (val) => setState(() => _selectedCompartilharTratamento = val),
-      onPressedSalvar:  () => _salvarTratamento(usuarioProvider),
+      onPressedSalvar:  () async => _salvarTratamento(usuarioProvider),
 
     );
   }

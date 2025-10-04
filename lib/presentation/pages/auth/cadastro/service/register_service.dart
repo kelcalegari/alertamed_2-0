@@ -17,6 +17,7 @@ class RegisterService {
       : _auth = auth ?? FirebaseAuth.instance,
         _firestore = firestore ?? FirebaseFirestore.instance;
 
+  /// Cria a conta, envia e-mail de verificação e redireciona para a tela de verificação.
   Future<void> criarConta({
     required BuildContext context,
     required String nome,
@@ -38,18 +39,22 @@ class RegisterService {
       // 2) Normalizações
       final userId = user.uid;
       final emailLower = email.trim().toLowerCase();
-      final dataNascDate = DateFormat('dd/MM/yyyy').parseStrict(dataNascimentoTexto.trim());
+      final dataNascDate = DateFormat('dd/MM/yyyy')
+          .parseStrict(dataNascimentoTexto.trim());
       final dataNascTs = Timestamp.fromDate(dataNascDate);
 
-      // 3) Escrever no Firestore (batch atômico)
+      // 3) Escrever no Firestore (status pendente e emailVerified=false)
       final batch = _firestore.batch();
 
       final usuariosRef = _firestore.collection('usuarios').doc(userId);
       batch.set(usuariosRef, {
         'nome': nome.trim(),
         'email': email.trim(),
+        'emailLower': emailLower,
         'sexo': sexo.trim(),
-        'dataNascimento': dataNascTs, // Timestamp
+        'dataNascimento': dataNascTs,
+        'emailVerified': false,
+        'status': 'pending_verification',
         'criadoEm': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -62,15 +67,14 @@ class RegisterService {
 
       await batch.commit();
 
-      // 4) (Opcional) Verificação de e-mail
+      // 4) Verificação de e-mail
       if (enviarEmailVerificacao && !user.emailVerified) {
         await user.sendEmailVerification();
       }
 
-      // 5) Navega para home
+      // 5) NÃO libera a home ainda. Leva para a tela/portão de verificação.
       if (context.mounted) {
-        context.read<UsuarioProvider>().fetchData();
-        Navigator.pushReplacementNamed(context, Routes.home);
+        Navigator.pushReplacementNamed(context, Routes.verifyEmail);
       }
     } on FirebaseAuthException catch (e) {
       String mensagemErro;
@@ -100,6 +104,76 @@ class RegisterService {
         context: context,
         title: RegisterTexts.dialogTitle,
         message: '${RegisterTexts.genericError} ${e.toString()}',
+      );
+    }
+  }
+
+  /// Reenvia o e-mail de verificação para o usuário atual.
+  Future<void> reenviarEmailVerificacao(BuildContext context) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('Usuário não autenticado.');
+      await user.sendEmailVerification();
+      CustomPopup.show(
+        context: context,
+        title: RegisterTexts.dialogTitle,
+        message: 'E-mail de verificação reenviado. Verifique sua caixa de entrada.',
+      );
+    } catch (e) {
+      CustomPopup.show(
+        context: context,
+        title: RegisterTexts.dialogTitle,
+        message: 'Falha ao reenviar: $e',
+      );
+    }
+  }
+
+  /// Recarrega o usuário e força refresh do token (para propagar email_verified).
+  Future<User?> checarVerificacaoAtualizarToken() async {
+    final user = _auth.currentUser;
+    if (user == null) return null;
+    await user.reload();
+    final refreshed = _auth.currentUser;
+    if (refreshed != null) {
+      // Garante que o claim email_verified seja atualizado nas regras
+      await refreshed.getIdToken(true);
+    }
+    return _auth.currentUser;
+  }
+
+  /// Chame isso após detectar que o e-mail foi verificado (na tela "Já verifiquei").
+  /// Atualiza o Firestore e libera a navegação para a Home + carrega o provider.
+  Future<void> finalizarOnboardingPosVerificacao(BuildContext context) async {
+    try {
+      final user = await checarVerificacaoAtualizarToken();
+      if (user == null) throw Exception('Usuário não autenticado.');
+      if (!user.emailVerified) {
+        CustomPopup.show(
+          context: context,
+          title: RegisterTexts.dialogTitle,
+          message:
+          'Ainda não detectei a verificação do e-mail. Aguarde alguns segundos e tente novamente.',
+        );
+        return;
+      }
+
+      // Marca verificado no Firestore
+      await _firestore.collection('usuarios').doc(user.uid).set({
+        'emailVerified': true,
+        'status': 'active',
+        'verificadoEm': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (context.mounted) {
+        // Agora sim carregue dados e vá para a Home
+        await context.read<UsuarioProvider>().fetchData();
+        Navigator.pushNamedAndRemoveUntil(context, Routes.home, (_) => false);
+      }
+    } catch (e) {
+      CustomPopup.show(
+        context: context,
+        title: RegisterTexts.dialogTitle,
+        message: 'Erro ao finalizar verificação: $e',
       );
     }
   }

@@ -285,6 +285,7 @@ class RelatorioService {
         name: base,
         bytes: bytes,
         ext: ext.replaceFirst('.', ''),
+        //fileExtension: ext.replaceFirst('.', ''),
         mimeType: mime,
       );
     }

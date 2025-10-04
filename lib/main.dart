@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -19,23 +18,31 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   tz.initializeTimeZones();
   tz.setLocalLocation(tz.getLocation('America/Sao_Paulo'));
+
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // (Opcional) idioma dos e-mails do Firebase
+  try {
+    await FirebaseAuth.instance.setLanguageCode('pt_BR');
+  } catch (_) {}
+
   await NotificationService().init();
+
   await Workmanager().initialize(
     bgCallbackDispatcher,
     isInDebugMode: false, // true para testes (logs)
   );
+
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => UsuarioProvider()),
       ],
-      child: AlertaMedApp(),
+      child: const AlertaMedApp(),
     ),
   );
-
 }
 
 class AlertaMedApp extends StatelessWidget {
@@ -43,7 +50,17 @@ class AlertaMedApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-
+    // Define a rota inicial:
+    // - não logado -> onboarding
+    // - logado e verificado -> home
+    // - logado e NÃO verificado -> verifyEmail
+    final user = FirebaseAuth.instance.currentUser;
+    final String initial;
+    if (user == null) {
+      initial = Routes.onboarding;
+    } else {
+      initial = (user.emailVerified == true) ? Routes.home : Routes.verifyEmail;
+    }
 
     return MaterialApp(
       navigatorKey: navigatorKey,
@@ -54,14 +71,10 @@ class AlertaMedApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      supportedLocales: const [
-        Locale('pt', 'BR'),
-      ],
+      supportedLocales: const [Locale('pt', 'BR')],
       locale: const Locale('pt', 'BR'),
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-      ),
-      initialRoute: FirebaseAuth.instance.currentUser != null ? Routes.home : Routes.onboarding,
+      theme: ThemeData(primarySwatch: Colors.blue),
+      initialRoute: initial,
       onGenerateRoute: Routes.generateRoute,
     );
   }

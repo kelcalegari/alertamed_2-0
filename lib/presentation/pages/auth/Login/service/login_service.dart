@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 import '../../../../../providers/user_data_provider.dart';
 import '../../../../routes/routes.dart';
 import '../../../../shared/modals/custom_popup.dart';
+import '../../utils/auth_validator.dart';
 import '../login_texts.dart';
+import 'package:flutter/services.dart';
 
 class LoginService {
   final emailController = TextEditingController();
@@ -20,13 +22,51 @@ class LoginService {
     if (!formKey.currentState!.validate()) return;
 
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: emailController.text.trim(),
         password: passwordController.text,
       );
-      context.read<UsuarioProvider>().onLogin();
 
-      Navigator.pushReplacementNamed(context, Routes.home);
+      final user = cred.user;
+      if (user == null) {
+        throw FirebaseAuthException(code: 'user-not-found', message: 'Usuário não encontrado.');
+      }
+
+      await user.reload();
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
+
+      final refreshed = FirebaseAuth.instance.currentUser!;
+      final verified = refreshed.emailVerified;
+
+      if (!verified) {
+        try {
+          await refreshed.sendEmailVerification();
+        } catch (_) {}
+
+        if (context.mounted) {
+          CustomPopup.show(
+            context: context,
+            title: LoginTexts.dialogTitle,
+            message:
+            'Enviamos um link de verificação para o seu e-mail. '
+                'Clique no link e depois toque em "Já verifiquei" na próxima tela.',
+          );
+          Navigator.pushReplacementNamed(context, Routes.verifyEmail);
+        }
+        return;
+      }
+
+      if (context.mounted) {
+        //final email = emailController.text.trim();
+        //await EmailHistoryStore().setLast(email);
+        await context.read<UsuarioProvider>().onLogin();
+        try {
+           TextInput.finishAutofillContext(shouldSave: true);
+        } catch (_) {
+          // silencioso; nem todo dispositivo precisa/tem isso ativo
+        }
+        Navigator.pushReplacementNamed(context, Routes.home);
+      }
     } on FirebaseAuthException catch (e) {
       String errorMsg;
       switch (e.code) {
@@ -55,12 +95,106 @@ class LoginService {
           errorMsg = '${LoginTexts.errorDefault} (${e.code})';
       }
 
+      if (context.mounted) {
+        CustomPopup.show(
+          context: context,
+          title: LoginTexts.dialogTitle,
+          message: errorMsg,
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        CustomPopup.show(
+          context: context,
+          title: LoginTexts.dialogTitle,
+          message: 'Falha na autenticação: $e',
+        );
+      }
+    }
+  }
 
-      CustomPopup.show(
-        context: context,
-        title: LoginTexts.dialogTitle,
-        message: errorMsg,
-      );
+  /// 🔐 Redefinição de senha usando o e-mail digitado no campo da tela de login
+  Future<void> redefinirSenhaComEmailDoCampo(BuildContext context) async {
+    final email = emailController.text.trim();
+
+    // valida formato de e-mail com o mesmo validador da UI
+    final emailError = AuthValidator.validateEmail(email);
+    if (emailError != null) {
+      if (context.mounted) {
+        CustomPopup.show(
+          context: context,
+          title: LoginTexts.dialogTitle,
+          message: 'Informe um e-mail válido para redefinir a senha.',
+        );
+      }
+      return;
+    }
+
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      if (context.mounted) {
+        CustomPopup.show(
+          context: context,
+          title: "E-mail de redefinição enviado",
+          message:
+          'Enviamos um e-mail com o link para redefinir sua senha. '
+              'Verifique sua caixa de entrada (e o Spam).',
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      String msg;
+      switch (e.code) {
+        case 'invalid-email':
+          msg = LoginTexts.errorInvalidEmail;
+          break;
+        case 'user-not-found':
+          msg = 'Não encontramos conta com esse e-mail.';
+          break;
+        case 'too-many-requests':
+          msg = LoginTexts.errorTooManyRequests;
+          break;
+        default:
+          msg = 'Não foi possível enviar o e-mail de redefinição. (${e.code})';
+      }
+      if (context.mounted) {
+        CustomPopup.show(
+          context: context,
+          title: LoginTexts.dialogTitle,
+          message: msg,
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        CustomPopup.show(
+          context: context,
+          title: LoginTexts.dialogTitle,
+          message: 'Ocorreu um erro: $e',
+        );
+      }
+    }
+  }
+
+  /// Reenvia o e-mail de verificação manualmente (útil na tela de verificação).
+  Future<void> reenviarVerificacao(BuildContext context) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) throw Exception('Usuário não autenticado.');
+      await user.sendEmailVerification();
+      if (context.mounted) {
+        CustomPopup.show(
+          context: context,
+          title: LoginTexts.dialogTitle,
+          message: 'E-mail de verificação reenviado.',
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        CustomPopup.show(
+          context: context,
+          title: LoginTexts.dialogTitle,
+          message: 'Não foi possível reenviar: $e',
+        );
+      }
     }
   }
 }

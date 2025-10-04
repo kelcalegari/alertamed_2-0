@@ -16,11 +16,18 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final controller = LoginService();
 
+
+  bool _isLoggingIn = false;
+
+
+
   @override
   void dispose() {
     controller.dispose();
     super.dispose();
   }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -61,55 +68,68 @@ class _LoginPageState extends State<LoginPage> {
                 children: [
                   Expanded(
                     child: Form(
-                        key: controller.formKey,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            const Text(
-                              LoginTexts.loginTitle,
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.textVerde,
-                              ),
+                      key: controller.formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text(
+                            LoginTexts.loginTitle,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.textVerde,
                             ),
-                            const SizedBox(height: 20),
-                            CustomTextField(
-                              ctrl: controller.emailController,
-                              label: LoginTexts.emailLabel,
-                              textInputType: TextInputType.emailAddress,
-                              validador: AuthValidator.validateEmail,
-                            ),
-                            const SizedBox(height: 16),
-                            CustomTextField(
-                              ctrl: controller.passwordController,
-                              label: LoginTexts.passwordLabel,
-                              textInputType: TextInputType.visiblePassword,
-                              isPassword: true,
-                              validador: AuthValidator.validatePassword,
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.pushNamed(context, Routes.resetPassword),
-                                  child: const Text(
-                                    LoginTexts.forgotPassword,
-                                    style: TextStyle(
-                                      color: AppColors.textVerde,
-                                      fontWeight: FontWeight.bold,
-                                    ),
+                          ),
+                          const SizedBox(height: 20),
+
+                          // ===== Campo de e-mail (apenas pré-preenchido com o último usado) =====
+                          CustomTextField(
+                            ctrl: controller.emailController,
+                            label: LoginTexts.emailLabel,
+                            textInputType: TextInputType.emailAddress,
+                            validador: AuthValidator.validateEmail,
+                            textInputAction: TextInputAction.next,
+                            autofillHints: const [
+                              AutofillHints.email,
+                              AutofillHints.username, // alguns gerenciadores preferem "username"
+                            ],
+                          ),
+
+                          const SizedBox(height: 16),
+                          CustomTextField(
+                            ctrl: controller.passwordController,
+                            label: LoginTexts.passwordLabel,
+                            textInputType: TextInputType.visiblePassword,
+                            isPassword: true,
+                            validador: AuthValidator.validatePassword,
+                            textInputAction: TextInputAction.done,
+                            autofillHints: const [
+                              AutofillHints.password,
+                            ],
+
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton(
+                                onPressed: () =>
+                                    controller.redefinirSenhaComEmailDoCampo(context),
+                                child: const Text(
+                                  LoginTexts.forgotPassword,
+                                  style: TextStyle(
+                                    color: AppColors.textVerde,
+                                    fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                              ],
-                            ),
-                          ],
-                        ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
-
+                    ),
                   ),
+
                   const SizedBox(height: 12),
                   Center(
                     child: SizedBox(
@@ -121,19 +141,56 @@ class _LoginPageState extends State<LoginPage> {
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(30),
                           ),
+                          disabledBackgroundColor:
+                          AppColors.botoesVerdes.withOpacity(0.6),
+                          disabledForegroundColor:
+                          AppColors.textBranco.withOpacity(0.9),
                         ),
-                        onPressed: () {
+                        onPressed: _isLoggingIn
+                            ? null
+                            : () async {
                           if (controller.formKey.currentState!.validate()) {
-                            controller.autenticarUsuario(context);
+                            setState(() => _isLoggingIn = true);
+
+                            await controller.autenticarUsuario(context);
+
+                            if (mounted) setState(() => _isLoggingIn = false);
                           }
                         },
-                        child: const Text(
-                          LoginTexts.loginButton,
-                          style: TextStyle(color: AppColors.textBranco),
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 200),
+                          child: _isLoggingIn
+                              ? Row(
+                            key: const ValueKey('logging'),
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.5,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(width: 10),
+                              Text(
+                                'Entrando…',
+                                style: TextStyle(color: AppColors.textBranco),
+                              ),
+                            ],
+                          )
+                              : const Text(
+                            LoginTexts.loginButton,
+                            key: ValueKey('login'),
+                            style: TextStyle(color: AppColors.textBranco),
+                          ),
                         ),
                       ),
                     ),
                   ),
+
                   const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -143,7 +200,8 @@ class _LoginPageState extends State<LoginPage> {
                         style: TextStyle(color: AppColors.textVerde),
                       ),
                       TextButton(
-                        onPressed: () => Navigator.pushNamed(context, Routes.register),
+                        onPressed: () =>
+                            Navigator.pushNamed(context, Routes.register),
                         child: const Text(
                           LoginTexts.createAccount,
                           style: TextStyle(
@@ -162,5 +220,4 @@ class _LoginPageState extends State<LoginPage> {
       ),
     );
   }
-
 }

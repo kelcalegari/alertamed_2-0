@@ -27,6 +27,9 @@ class CustomTextField extends StatefulWidget {
   final bool? readOnly;          // se null, aplica lógica padrão (data/hora = readOnly)
   final VoidCallback? onTap;     // se null, aplica pickers quando for data/hora
   final ValueChanged<String>? onChanged;
+  final List<String>? autofillHints; // 👈 novo
+  final TextInputAction? textInputAction;
+
   const CustomTextField({
     super.key,
     required this.ctrl,
@@ -51,6 +54,8 @@ class CustomTextField extends StatefulWidget {
     this.onTap, this.onChanged,          // novo
     this.bottom,
     this.bottomSpacing = 6,
+    this.autofillHints,               // 👈 novo
+    this.textInputAction,
   });
 
   @override
@@ -82,6 +87,8 @@ class _CustomTextFieldState extends State<CustomTextField> {
             obscureText: widget.isPassword && !_passVisible,
             validator: widget.validador,
             style: TextStyle(fontSize: widget.fontSize, color: AppColors.textVerde),
+            textInputAction:  widget.textInputAction,
+            autofillHints:  widget.autofillHints,
 
             // >>> READONLY opcional
             readOnly: effectiveReadOnly,

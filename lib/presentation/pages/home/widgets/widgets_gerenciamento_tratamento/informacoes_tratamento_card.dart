@@ -18,7 +18,9 @@ class InformacoesAdicionais extends StatefulWidget {
   final VoidCallback onConcluir;
   final ValueChanged<String?> onUnidadesMedidaChanged;
   final ValueChanged<String?> onCompartilharTratamentoChanged;
-  final VoidCallback? onPressedSalvar;
+
+  /// Agora assíncrono para podermos aguardar e mostrar o loading no botão
+  final Future<void> Function()? onPressedSalvar;
 
   const InformacoesAdicionais({
     Key? key,
@@ -42,6 +44,8 @@ class InformacoesAdicionais extends StatefulWidget {
 }
 
 class _InformacoesAdicionaisState extends State<InformacoesAdicionais> {
+  bool _isSaving = false;
+
   @override
   Widget build(BuildContext context) {
     return Form(
@@ -118,19 +122,6 @@ class _InformacoesAdicionaisState extends State<InformacoesAdicionais> {
               pad: 0,
               textInputType: TextInputType.multiline,
             ),
-            const SizedBox(height: 16),
-            CustomSelectorField<String>(
-              selectedValue: widget.selectedCompartilharTratamento,
-              items: widget.vectorCompartilharTratamento
-                  .map((g) => DropdownMenuItem(value: g, child: Text(g)))
-                  .toList(),
-              onChanged: widget.onCompartilharTratamentoChanged,
-              hint: widget.vectorCompartilharTratamento.isNotEmpty ? widget.vectorCompartilharTratamento[0] : "Não",
-              pad: 0,
-              label: "Compartilhar o Tratamento?",
-              validador: (value) =>
-              value == null ? "Informe se deseja compartilhar o tratamento" : null,
-            ),
             const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
@@ -139,8 +130,56 @@ class _InformacoesAdicionaisState extends State<InformacoesAdicionais> {
                   backgroundColor: AppColors.botoesVerdes,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                 ),
-                onPressed: widget.onPressedSalvar,
-                child: const Text("Salvar", style: TextStyle(color: AppColors.textBranco)),
+                onPressed: _isSaving
+                    ? null
+                    : () async {
+                  // (opcional) validar form antes
+                  // final ok = widget.formKeyIndexTres.currentState?.validate() ?? true;
+                  // if (!ok) return;
+
+                  setState(() => _isSaving = true);
+                  try {
+                    if (widget.onPressedSalvar != null) {
+                      await widget.onPressedSalvar!();
+                    }
+                    // quem decide chamar onConcluir é a tela pai;
+                    // se quiser concluir aqui, descomente:
+                    // widget.onConcluir();
+                  } catch (e) {
+                    // apresente feedback se quiser
+                    // ScaffoldMessenger.of(context).showSnackBar(
+                    //   const SnackBar(content: Text('Erro ao salvar')),
+                    // );
+                    rethrow;
+                  } finally {
+                    if (mounted) setState(() => _isSaving = false);
+                  }
+                },
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  child: _isSaving
+                      ? Row(
+                    key: const ValueKey('saving'),
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: const [
+                      SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      ),
+                      SizedBox(width: 10),
+                      Text("Salvando…", style: TextStyle(color: AppColors.textBranco)),
+                    ],
+                  )
+                      : const Text(
+                    "Salvar",
+                    key: ValueKey('save'),
+                    style: TextStyle(color: AppColors.textBranco),
+                  ),
+                ),
               ),
             ),
           ],

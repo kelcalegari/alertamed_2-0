@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:smartmed/providers/user_data_provider.dart';
+
 import '../../../shared/widgets/custom_seletor_field.dart';
 import '../../../shared/widgets/custom_text_field.dart';
 import '../../../themes/app_colors.dart';
@@ -13,7 +16,6 @@ class CardAdicionarSintomas extends StatefulWidget {
     required this.onCancel,
     required this.onSave,
   });
-  
 
   @override
   State<CardAdicionarSintomas> createState() => _CardAdicionarSintomasState();
@@ -23,6 +25,14 @@ class _CardAdicionarSintomasState extends State<CardAdicionarSintomas> {
   final TextEditingController sintomaController = TextEditingController();
   final TextEditingController observacaoController = TextEditingController();
   String? intensidadeSelecionada = 'Média';
+  bool _isSaving = false;
+
+  @override
+  void dispose() {
+    sintomaController.dispose();
+    observacaoController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,13 +45,13 @@ class _CardAdicionarSintomasState extends State<CardAdicionarSintomas> {
         }
       },
       child: Container(
-        height: mediaQuery.size.height, // ocupa a tela toda
+        height: mediaQuery.size.height,
         decoration: const BoxDecoration(
           color: AppColors.cardBackgroundBranco,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
         padding: EdgeInsets.only(
-          bottom: mediaQuery.viewInsets.bottom + 16, // espaço para o teclado
+          bottom: mediaQuery.viewInsets.bottom + 16,
           left: 16,
           right: 16,
           top: 16,
@@ -72,11 +82,7 @@ class _CardAdicionarSintomasState extends State<CardAdicionarSintomas> {
                 items: ['Leve', 'Média', 'Grave']
                     .map((e) => DropdownMenuItem(value: e, child: Text(e)))
                     .toList(),
-                onChanged: (value) {
-                  setState(() {
-                    intensidadeSelecionada = value;
-                  });
-                },
+                onChanged: (value) => setState(() => intensidadeSelecionada = value),
                 label: 'Intensidade',
                 hint: 'Selecione a intensidade',
                 icon: Icons.bolt,
@@ -97,26 +103,59 @@ class _CardAdicionarSintomasState extends State<CardAdicionarSintomas> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                onPressed: () async {
+                onPressed: _isSaving
+                    ? null
+                    : () async {
+                  final usuarioProvider = context.read<UsuarioProvider>();
+                  setState(() => _isSaving = true);
                   try {
                     await salvarSintomas(
                       nome: sintomaController.text.trim(),
                       intensidade: intensidadeSelecionada ?? 'Média',
                       observacoes: observacaoController.text.trim(),
+                      usuarioProvider: usuarioProvider,
                     );
+
                     widget.onSave(
                       sintomaController.text.trim(),
-                      ['Leve', 'Média', 'Grave'].indexOf(intensidadeSelecionada ?? 'Média'),
+                      ['Leve', 'Média', 'Grave']
+                          .indexOf(intensidadeSelecionada ?? 'Média'),
                       observacaoController.text.trim(),
                     );
                   } catch (e) {
-                    print('Erro ao salvar sintoma: $e');
+                    debugPrint('Erro ao salvar sintoma: $e');
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Erro ao salvar sintoma')),
                     );
+                  } finally {
+                    if (mounted) setState(() => _isSaving = false);
                   }
                 },
-                child: const Text('Salvar', style: TextStyle(color: AppColors.textBranco),),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  child: _isSaving
+                      ? Row(
+                    key: const ValueKey('saving'),
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: const [
+                      SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      ),
+                      SizedBox(width: 10),
+                      Text('Salvando…', style: TextStyle(color: AppColors.textBranco)),
+                    ],
+                  )
+                      : const Text(
+                    'Salvar',
+                    key: ValueKey('save'),
+                    style: TextStyle(color: AppColors.textBranco),
+                  ),
+                ),
               ),
             ],
           ),
@@ -124,5 +163,4 @@ class _CardAdicionarSintomasState extends State<CardAdicionarSintomas> {
       ),
     );
   }
-
 }

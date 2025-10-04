@@ -38,6 +38,7 @@ class _RegisterPageState extends State<RegisterPage> {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
+    bool _isRegistering = false;
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
@@ -159,7 +160,41 @@ class _RegisterPageState extends State<RegisterPage> {
                       textAlign: TextAlign.center,
                     ),
                     TextButton(
-                      onPressed: () {},
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            title: const Text(
+                              RegisterTexts.termsDialogTitle ,
+                              style: TextStyle(
+                                color: AppColors.textVerde,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            content: SingleChildScrollView(
+                              child: Text(
+                                RegisterTexts.termsDialogBody ,
+                                style: const TextStyle(fontSize: 14, color: Colors.black87),
+                              ),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx),
+                                child: const Text(
+                                  'Aceitar',
+                                  style: TextStyle(
+                                    color: AppColors.textVerde,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                       child: const Text(
                         RegisterTexts.termsButton,
                         style: TextStyle(
@@ -170,6 +205,7 @@ class _RegisterPageState extends State<RegisterPage> {
                         textAlign: TextAlign.center,
                       ),
                     ),
+
                     const SizedBox(height: 12),
                     Center(
                       child: SizedBox(
@@ -181,15 +217,52 @@ class _RegisterPageState extends State<RegisterPage> {
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(30),
                             ),
+                            disabledBackgroundColor: AppColors.botoesVerdes.withOpacity(0.6),
+                            disabledForegroundColor: AppColors.textBranco.withOpacity(0.9),
                           ),
-                          onPressed: criarConta,
-                          child: const Text(
-                            RegisterTexts.createAccount,
-                            style: TextStyle(color: AppColors.textBranco),
+                          onPressed: _isRegistering
+                              ? null
+                              : () async {
+                            if (!_formKey.currentState!.validate()) return;
+                            setState(() => _isRegistering = true);
+                            try {
+                              await criarConta();
+                            } finally {
+                              if (mounted) setState(() => _isRegistering = false);
+                            }
+                          },
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            child: _isRegistering
+                                ? Row(
+                              key: const ValueKey('creating'),
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                SizedBox(
+                                  height: 18,
+                                  width: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                  ),
+                                ),
+                                SizedBox(width: 10),
+                                Text(
+                                  'Criando…',
+                                  style: TextStyle(color: AppColors.textBranco),
+                                ),
+                              ],
+                            )
+                                : const Text(
+                              RegisterTexts.createAccount,
+                              key: ValueKey('create'),
+                              style: TextStyle(color: AppColors.textBranco),
+                            ),
                           ),
                         ),
                       ),
                     ),
+
                     const SizedBox(height: 12),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,

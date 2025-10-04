@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:diacritic/diacritic.dart';
+import 'dart:async';
 import '../../../../core/services/notification_service.dart';
 import '../../../../providers/user_data_provider.dart';
 
@@ -27,8 +28,10 @@ class SalvarTratamento {
   final UsuarioProvider usuarioProvider;
   final bool isContinuo;
   final int janelaPreGeracaoDias;
-  /// Para "Junto com Refeições": ['cafe','almoco','jantar']
   final List<String> refeicoesSelecionadas;
+
+  /// Novo: timeout curto para decidir fallback offline sem travar UI
+  final Duration writeTimeout;
 
   SalvarTratamento({
     required this.nomeMedicamento,
@@ -52,18 +55,16 @@ class SalvarTratamento {
     required this.refeicoesSelecionadas,
     required this.isContinuo,
     this.janelaPreGeracaoDias = 15,
+    this.writeTimeout = const Duration(seconds: 2), // << aqui
   });
 
   // ------------------- Utils & Helpers -------------------
 
-
-// UID alvo para gravação: se for self => userId; se for paciente em contexto => contextoUsuarioId
   String get _targetUid {
     final ctx = (usuarioProvider.contextoUsuarioId ?? '').trim();
     return usuarioProvider.isContextoSouEu ? usuarioProvider.userId : ctx;
   }
 
-// segurança: evita gravar em vazio quando estiver no contexto do paciente
   void _assertTargetUid() {
     if (!usuarioProvider.isContextoSouEu && (_targetUid.isEmpty)) {
       throw Exception('Contexto de paciente sem UID definido (contextoUsuarioId vazio).');
@@ -74,7 +75,6 @@ class SalvarTratamento {
     'uid': usuarioProvider.userId,
     'role': role, // 'patient' ou 'caregiver'
   };
-
 
   int _parseIntSafe(String s, {int fallback = 0}) {
     final v = int.tryParse(s.trim());
@@ -113,50 +113,49 @@ class SalvarTratamento {
     try {
       return _parseTimeOnDate(horaInicial, baseDate);
     } catch (_) {
-      return DateTime(baseDate.year, baseDate.month, baseDate.day, 8, 0); // fallback 08:00
+      return DateTime(baseDate.year, baseDate.month, baseDate.day, 8, 0);
     }
   }
-// ADD: helper para inferir 'cafe' | 'almoco' | 'jantar' a partir do horário do dia
+
   String? _inferirMomentoRefeicao(DateTime dt, List<dynamic>? horariosRefeicoesProvider) {
     if (horariosRefeicoesProvider == null || refeicoesSelecionadas.isEmpty) return null;
 
     final chaveDia = _diaSemanaPTBR(dt);
     final cfgDia = _obterConfigDoDia(horariosRefeicoesProvider, chaveDia);
 
-    // monta mapa refeicao -> HH:mm (com fallback)
     final mapaMomento = <String, String>{
-      'cafe':   ((cfgDia?['horaCafe']   ?? '').toString().trim().isEmpty) ? '07:30' : (cfgDia?['horaCafe']   ?? '').toString().trim(),
-      'almoco': ((cfgDia?['horaAlmoco'] ?? '').toString().trim().isEmpty) ? '12:00' : (cfgDia?['horaAlmoco'] ?? '').toString().trim(),
-      'jantar': ((cfgDia?['horaJanta']  ?? '').toString().trim().isEmpty) ? '19:00' : (cfgDia?['horaJanta']  ?? '').toString().trim(),
+      'cafe': ((cfgDia?['horaCafe'] ?? '').toString().trim().isNotEmpty)
+          ? (cfgDia?['horaCafe'] ?? '').toString().trim()
+          : '07:30',
+      'almoco': ((cfgDia?['horaAlmoco'] ?? '').toString().trim().isNotEmpty)
+          ? (cfgDia?['horaAlmoco'] ?? '').toString().trim()
+          : '12:00',
+      'jantar': ((cfgDia?['horaJanta'] ?? '').toString().trim().isNotEmpty)
+          ? (cfgDia?['horaJanta'] ?? '').toString().trim()
+          : '19:00',
     };
 
     final hh = dt.hour.toString().padLeft(2, '0');
     final mm = dt.minute.toString().padLeft(2, '0');
     final hhmm = '$hh:$mm';
-
-    // considera apenas as refeições escolhidas neste tratamento
     for (final r in refeicoesSelecionadas) {
-      if (mapaMomento[r] == hhmm) return r; // bateu exato
+      if (mapaMomento[r] == hhmm) return r;
     }
-
-    // (opcional) tolerância de 1–2 minutos se houver arredondamentos
     int toMin(String s) {
       final d = _parseHHmm(s);
       return d == null ? -1 : d.inMinutes;
     }
+
     final alvo = toMin(hhmm);
     if (alvo >= 0) {
       for (final r in refeicoesSelecionadas) {
         final m = toMin(mapaMomento[r] ?? '');
-        if (m >= 0 && ( (alvo - m).abs() <= 2 ) ) return r;
+        if (m >= 0 && ((alvo - m).abs() <= 2)) return r;
       }
     }
-
     return null;
   }
 
-  /// Normaliza rótulos de dias para chaves canônicas
-  /// ex.: "Seg", "segunda", "SEGUNDA" -> "segunda"; "Padrão" -> "padrao"
   String _normDia(String dia) {
     final d = dia.trim().toLowerCase();
     switch (d) {
@@ -187,11 +186,10 @@ class SalvarTratamento {
       case 'padrão':
         return 'padrao';
       default:
-        return d; // deixa como veio
+        return d;
     }
   }
 
-  /// Retorna a chave canônica do dia da semana para uma data.
   String _diaSemanaPTBR(DateTime dt) {
     switch (dt.weekday) {
       case DateTime.monday:
@@ -213,16 +211,9 @@ class SalvarTratamento {
     }
   }
 
-  /// A partir do provider.horariosRefeicoes (array de maps), retorna
-  /// o map do dia atual; se não houver, usa 'padrao'; se ainda assim
-  /// não houver, retorna null.
-  Map<String, dynamic>? _obterConfigDoDia(
-      List<dynamic>? horariosRefeicoes,
-      String chaveDia,
-      ) {
+  Map<String, dynamic>? _obterConfigDoDia(List<dynamic>? horariosRefeicoes, String chaveDia) {
     if (horariosRefeicoes == null) return null;
     Map<String, dynamic>? padrao;
-
     for (final item in horariosRefeicoes) {
       if (item is Map<String, dynamic>) {
         final diaStr = _normDia(item['dia']?.toString() ?? '');
@@ -237,12 +228,7 @@ class SalvarTratamento {
     return padrao;
   }
 
-  /// Dado um config de dia e a lista de refeições marcadas,
-  /// devolve horários HH:mm válidos (ordenados, sem duplicatas).
-  List<String> _horariosDasRefeicoesNoDia(
-      Map<String, dynamic>? cfgDia,
-      List<String> refeicoes,
-      ) {
+  List<String> _horariosDasRefeicoesNoDia(Map<String, dynamic>? cfgDia, List<String> refeicoes) {
     final out = <String>[];
     if (cfgDia != null) {
       for (final r in refeicoes) {
@@ -266,23 +252,16 @@ class SalvarTratamento {
       }
     }
 
-    // Fallbacks se cfgDia for nulo (nada cadastrado)
     if (out.isEmpty) {
-      final defaults = {
-        'cafe': '07:30',
-        'almoco': '12:00',
-        'jantar': '19:00',
-      };
+      final defaults = {'cafe': '07:30', 'almoco': '12:00', 'jantar': '19:00'};
       for (final r in refeicoes) {
         final hhmm = defaults[r];
         if (hhmm != null) out.add(hhmm);
       }
     }
 
-    // normaliza -> Duration -> ordena -> volta para HH:mm e remove duplicatas
     final durs = out.map(_parseHHmm).whereType<Duration>().toList()
       ..sort((a, b) => a.inMinutes.compareTo(b.inMinutes));
-
     final seen = <int>{};
     final norm = <String>[];
     for (final d in durs) {
@@ -296,7 +275,6 @@ class SalvarTratamento {
     return norm;
   }
 
-  /// Gera lembretes por REFEIÇÃO até uma data-limite (janela).
   List<DateTime> _gerarLembretesRefeicaoAte({
     required DateTime dataInicial,
     required List<String> refeicoes,
@@ -306,7 +284,6 @@ class SalvarTratamento {
     final result = <DateTime>[];
     final agora = DateTime.now();
     final limitePrimeiroDia = agora.add(const Duration(minutes: 10));
-
     DateTime dia = DateTime(dataInicial.year, dataInicial.month, dataInicial.day);
 
     while (!dia.isAfter(endIncl)) {
@@ -316,21 +293,17 @@ class SalvarTratamento {
 
       for (final hhmm in horariosHHmm) {
         final dt = _parseTimeOnDate(hhmm, dia);
-
-        // se for hoje, respeitar +10 min
-        final mesmoDiaHoje = dt.year == agora.year && dt.month == agora.month && dt.day == agora.day;
+        final mesmoDiaHoje =
+            dt.year == agora.year && dt.month == agora.month && dt.day == agora.day;
         if (mesmoDiaHoje && dt.isBefore(limitePrimeiroDia)) continue;
-
         if (dt.isAfter(endIncl)) return result;
         result.add(dt);
       }
-
       dia = dia.add(const Duration(days: 1));
     }
     return result;
   }
 
-  /// Gera lembretes de HORÁRIOS FIXOS até uma data-limite.
   List<DateTime> _gerarLembretesFixosAte({
     required DateTime dataInicialDate,
     required List<String> horariosHHmm,
@@ -338,23 +311,19 @@ class SalvarTratamento {
   }) {
     final horas = horariosHHmm.map(_parseHHmm).whereType<Duration>().toList()
       ..sort((a, b) => a.inMinutes.compareTo(b.inMinutes));
-
     if (horas.isEmpty) return [];
 
     final result = <DateTime>[];
     final agora = DateTime.now();
     final limitePrimeiroDia = agora.add(const Duration(minutes: 10));
-
     DateTime dia = DateTime(dataInicialDate.year, dataInicialDate.month, dataInicialDate.day);
 
     while (!dia.isAfter(endIncl)) {
       for (final h in horas) {
         final dt = DateTime(dia.year, dia.month, dia.day).add(h);
-
-        // se for hoje, respeitar +10 min
-        final mesmoDiaHoje = dt.year == agora.year && dt.month == agora.month && dt.day == agora.day;
+        final mesmoDiaHoje =
+            dt.year == agora.year && dt.month == agora.month && dt.day == agora.day;
         if (mesmoDiaHoje && dt.isBefore(limitePrimeiroDia)) continue;
-
         if (dt.isAfter(endIncl)) return result;
         result.add(dt);
       }
@@ -363,7 +332,6 @@ class SalvarTratamento {
     return result;
   }
 
-  /// Gera lembretes por INTERVALO fixo até uma data-limite.
   List<DateTime> _gerarLembretesIntervaloAte({
     required DateTime startDateTime,
     required int freqHoras,
@@ -373,7 +341,6 @@ class SalvarTratamento {
     final out = <DateTime>[];
     final nowPlus10 = DateTime.now().add(const Duration(minutes: 10));
     var t = startDateTime.isBefore(nowPlus10) ? nowPlus10 : startDateTime;
-
     while (!t.isAfter(endIncl)) {
       out.add(t);
       t = t.add(Duration(hours: freqHoras));
@@ -381,7 +348,6 @@ class SalvarTratamento {
     return out;
   }
 
-  /// Gera a lista de DateTimes (lembretes) em modo Horários Fixos com TOTAL de doses.
   List<DateTime> _gerarLembretesFixos({
     required DateTime dataInicialDate,
     required List<String> horariosHHmm,
@@ -390,21 +356,17 @@ class SalvarTratamento {
     if (horariosHHmm.isEmpty || totalDoses <= 0) {
       throw ArgumentError('Entradas inválidas em _gerarLembretesFixos');
     }
-
     final horas = horariosHHmm.map(_parseHHmm).whereType<Duration>().toList()
       ..sort((a, b) => a.inMinutes.compareTo(b.inMinutes));
-
     if (horas.isEmpty) {
       throw ArgumentError('Nenhum horário válido em horariosFixos');
     }
 
     final agora = DateTime.now();
     final limite = agora.add(const Duration(minutes: 10));
-
     final baseDia0 = DateTime(dataInicialDate.year, dataInicialDate.month, dataInicialDate.day);
-    final isDia0Hoje = baseDia0.year == agora.year &&
-        baseDia0.month == agora.month &&
-        baseDia0.day == agora.day;
+    final isDia0Hoje =
+        baseDia0.year == agora.year && baseDia0.month == agora.month && baseDia0.day == agora.day;
 
     final result = <DateTime>[];
     int diaOffset = 0;
@@ -424,35 +386,25 @@ class SalvarTratamento {
             if (dt.isBefore(limite)) continue;
           }
         }
-
         result.add(dt);
       }
-
       if (result.isEmpty && diaOffset == 0) {
         diaOffset++;
         continue;
       }
-      if (result.length < totalDoses) {
-        diaOffset++;
-      }
+      if (result.length < totalDoses) diaOffset++;
     }
-
     return result;
   }
 
-  /// Gera lembretes por REFEIÇÃO com TOTAL de doses.
   List<DateTime> _gerarLembretesPorRefeicao({
     required DateTime dataInicial,
     required List<String> refeicoes,
-    required List<dynamic>? horariosRefeicoesProvider, // array de maps
+    required List<dynamic>? horariosRefeicoesProvider,
     required int totalDoses,
   }) {
-    if (refeicoes.isEmpty) {
-      throw ArgumentError('refeicoesSelecionadas vazio');
-    }
-    if (totalDoses <= 0) {
-      throw ArgumentError('totalDoses deve ser > 0');
-    }
+    if (refeicoes.isEmpty) throw ArgumentError('refeicoesSelecionadas vazio');
+    if (totalDoses <= 0) throw ArgumentError('totalDoses deve ser > 0');
 
     final result = <DateTime>[];
     final agora = DateTime.now();
@@ -460,8 +412,8 @@ class SalvarTratamento {
 
     int diaOffset = 0;
     while (result.length < totalDoses) {
-      final diaAtual = DateTime(dataInicial.year, dataInicial.month, dataInicial.day)
-          .add(Duration(days: diaOffset));
+      final diaAtual =
+      DateTime(dataInicial.year, dataInicial.month, dataInicial.day).add(Duration(days: diaOffset));
 
       final chaveDia = _diaSemanaPTBR(diaAtual);
       final cfgDia = _obterConfigDoDia(horariosRefeicoesProvider, chaveDia);
@@ -471,14 +423,10 @@ class SalvarTratamento {
         if (result.length >= totalDoses) break;
         final dt = _parseTimeOnDate(hhmm, diaAtual);
 
-        // Regra do primeiro dia: precisa ser >= (agora + 10min)
-        final isMesmoDiaDeHoje = dt.year == agora.year &&
-            dt.month == agora.month &&
-            dt.day == agora.day;
+        final isMesmoDiaDeHoje =
+            dt.year == agora.year && dt.month == agora.month && dt.day == agora.day;
 
-        if (diaOffset == 0 && isMesmoDiaDeHoje && dt.isBefore(limite)) {
-          continue;
-        }
+        if (diaOffset == 0 && isMesmoDiaDeHoje && dt.isBefore(limite)) continue;
 
         result.add(dt);
       }
@@ -487,13 +435,71 @@ class SalvarTratamento {
         diaOffset++;
         continue;
       }
-
-      if (result.length < totalDoses) {
-        diaOffset++;
-      }
+      if (result.length < totalDoses) diaOffset++;
     }
-
     return result;
+  }
+
+  // ------------------- Fallback Offline Helpers -------------------
+
+  bool _isNetworkError(Object e) {
+    if (e is FirebaseException) {
+      return e.code == 'unavailable' ||
+          e.code == 'network-request-failed' ||
+          e.code == 'deadline-exceeded';
+    }
+    return false;
+  }
+
+  /// Executa um write com timeout curto. Retorna true se gravou online/local-cache sem travar.
+  Future<bool> _tryWrite(Future<void> Function() op) async {
+    try {
+      await op().timeout(writeTimeout);
+      return true;
+    } on TimeoutException {
+      return false; // assume offline/lento -> fallback
+    } catch (e) {
+      if (_isNetworkError(e)) return false;
+      rethrow; // erros lógicos propagam
+    }
+  }
+
+  /// Aplica o tratamento no estado local do provider (para UI não travar)
+  void _upsertProviderTratamentoLocal({
+    required String idUsuario,
+    required String idTratamento,
+    required Map<String, dynamic> tratamentoDoc,
+  }) {
+    final m = usuarioProvider.tratamentosMap[idUsuario] as Map<String, dynamic>? ?? {};
+    m[idTratamento] = tratamentoDoc;
+    usuarioProvider.tratamentosMap[idUsuario] = m;
+    usuarioProvider.notifyListeners();
+  }
+
+  void _upsertProviderLembreteLocal({
+    required String idUsuario,
+    required String idLembrete,
+    required Map<String, dynamic> lembreteDoc,
+  }) {
+    final list = usuarioProvider.lembretes;
+    final idx = list.indexWhere((e) => (e['__localId'] ?? e['id'] ?? '') == idLembrete);
+    if (idx >= 0) {
+      list[idx] = lembreteDoc;
+    } else {
+      list.add(lembreteDoc);
+    }
+    usuarioProvider.notifyListeners();
+  }
+
+  void _upsertProviderEstoqueLocal({
+    required String idMedicamento,
+    required Map<String, dynamic> estoqueDoc,
+  }) {
+    final est = usuarioProvider.estoqueMap;
+    final atual = (est[idMedicamento] as Map<String, dynamic>?) ?? {};
+    atual.addAll(estoqueDoc);
+    est[idMedicamento] = atual;
+    usuarioProvider.notifyListeners();
   }
 
   // ------------------- Fluxo principal -------------------
@@ -501,23 +507,22 @@ class SalvarTratamento {
     _assertTargetUid();
     final idUsuario = _targetUid;
 
-    // 1) Calcula o plano pelo Map
     final plano = _calcularPlanoLembretesMap();
     final datas = (plano['datas'] as List<DateTime>);
     final freqStr = plano['freq'] as String;
     final resumo = (plano['resumo'] as List<Map<String, dynamic>>);
 
-    // 2) Gera id do tratamento
-    final String idTratamento = firestore
+    // IDs (se offline, usamos IDs locais determinísticos)
+    final String idTratamentoOnline = firestore
         .collection('usuarios').doc(idUsuario)
         .collection('tratamentos').doc().id;
+    final String idTratamentoLocal = 'local_${DateTime.now().microsecondsSinceEpoch}';
 
-    // 3) Documento do tratamento
     final idMedicamento = gerarIdMedicamento(
       nomeMedicamento, concentracaoMedicamento, tipoMedicamento,
     );
 
-    final tratamentoDoc = {
+    final tratamentoBase = {
       'idMedicamento': idMedicamento,
       'nomeMedicamento': nomeMedicamento,
       'concentracaoMedicamento': concentracaoMedicamento,
@@ -545,119 +550,66 @@ class SalvarTratamento {
       'pendingSync': usuarioProvider.isContextoSouEu ? false : true,
     };
 
-    await firestore
-        .collection('usuarios').doc(idUsuario)
-        .collection('tratamentos').doc(idTratamento)
-        .set(tratamentoDoc);
+    // Tenta gravar online com timeout curto
+    final wroteOnline = await _tryWrite(() async {
+      await firestore
+          .collection('usuarios').doc(idUsuario)
+          .collection('tratamentos').doc(idTratamentoOnline)
+          .set(tratamentoBase);
+    });
 
-    // 4) Lembretes + notificações
+    final idTratamento = wroteOnline ? idTratamentoOnline : idTratamentoLocal;
+
+    if (!wroteOnline) {
+      // aplica no provider (para UI reagir) com flag de pendingSync
+      final localDoc = Map<String, dynamic>.from(tratamentoBase)
+        ..['__localId'] = idTratamento
+        ..['pendingSync'] = true;
+      _upsertProviderTratamentoLocal(
+        idUsuario: idUsuario,
+        idTratamento: idTratamento,
+        tratamentoDoc: localDoc,
+      );
+
+      // também escreve no cache do Firestore para já constar no "source:cache"
+      unawaited(
+        firestore
+            .collection('usuarios').doc(idUsuario)
+            .collection('tratamentos').doc(idTratamento)
+            .set(localDoc, SetOptions(merge: true)),
+      );
+    }
+
+    // Lembretes + notificações (não bloquear, sem travar se offline)
     await _gravarLembretesENotificacoes(
       idUsuario: idUsuario,
       idTratamento: idTratamento,
       datasLembretes: datas,
+      isOffline: !wroteOnline,
     );
 
-    // 5) Estoque
-    final idMed = idMedicamento;
+    // Estoque (não bloquear UI se offline)
     await _salvarEstoque(
       firestore: firestore,
       usuarioProvider: usuarioProvider,
       idUsuario: idUsuario,
-      idMedicamento: idMed,
+      idMedicamento: idMedicamento,
       qtdMedicamentoEstoqueCtrl: qtdMedicamentoEstoqueCtrl,
       qtdEstoqueMinimoCtrl: qtdEstoqueMinimoCtrl,
       dataValidadeCtrl: dataValidadeCtrl,
+      isOffline: !wroteOnline,
     );
   }
-
-  // ===========================================================
-// Função auxiliar para salvar estoque
-// ===========================================================
-  Future<void> _salvarEstoque({
-    required FirebaseFirestore firestore,
-    required UsuarioProvider usuarioProvider,
-    required String idUsuario,
-    required String idMedicamento,
-    required String qtdMedicamentoEstoqueCtrl,
-    required String qtdEstoqueMinimoCtrl,
-    required String dataValidadeCtrl,
-  }) async {
-    final String sQtdAtual = qtdMedicamentoEstoqueCtrl.trim();
-    final String sQtdMin = qtdEstoqueMinimoCtrl.trim();
-    final String sValidade = dataValidadeCtrl.trim();
-
-    // Regra 1: se qtdAtual não foi informada, NÃO cria/atualiza estoque
-    if (sQtdAtual.isEmpty) return;
-
-    // Monta o mapa somente com campos válidos
-    final Map<String, dynamic> novoEstoque = {
-      'qtdAtual': int.tryParse(sQtdAtual) ?? 0,
-    };
-
-    // Adiciona qtdMinima se veio preenchida
-    final int? qtdMinimaParsed =
-    sQtdMin.isNotEmpty ? int.tryParse(sQtdMin) : null;
-    if (qtdMinimaParsed != null) {
-      novoEstoque['qtdMinima'] = qtdMinimaParsed;
-    }
-
-    // Adiciona dataValidade se veio preenchida e válida
-    if (sValidade.isNotEmpty) {
-      try {
-        final dt = DateFormat('dd/MM/yyyy').parseStrict(sValidade);
-        novoEstoque['dataValidade'] = dt;
-      } catch (_) {
-        // inválida → ignora
-      }
-    }
-
-    final estoqueMap = usuarioProvider.estoqueMap;
-    final estoqueRef = firestore
-        .collection('usuarios')
-        .doc(idUsuario)
-        .collection('estoque')
-        .doc(idMedicamento);
-
-    if (estoqueMap.containsKey(idMedicamento)) {
-      await estoqueRef.update(novoEstoque);
-
-      // mescla no cache
-      final atual = Map<String, dynamic>.from(
-        estoqueMap[idMedicamento] as Map,
-      );
-      atual.addAll(novoEstoque);
-      estoqueMap[idMedicamento] = atual;
-    } else {
-      await estoqueRef.set(novoEstoque);
-      estoqueMap[idMedicamento] = novoEstoque;
-    }
-  }
-  String gerarIdMedicamento(String nome, String conc, String tipo) {
-    final normalized = [nome, conc, tipo]
-        .map((s) => removeDiacritics(s)
-        .toLowerCase()
-        .trim()
-        .replaceAll(RegExp(r'\s+'), ' '))
-        .join('|');
-
-    return normalized.toString();
-  }
-
 
   Future<void> atualizarTratamento({required String idTratamento}) async {
     _assertTargetUid();
     final idUsuario = _targetUid;
-    final docTrat = firestore
-        .collection('usuarios').doc(idUsuario)
-        .collection('tratamentos').doc(idTratamento);
 
-    // 1) Recalcula plano com base nos novos inputs
     final plano = _calcularPlanoLembretesMap();
     final datas = (plano['datas'] as List<DateTime>);
     final freqStr = plano['freq'] as String;
     final resumo = (plano['resumo'] as List<Map<String, dynamic>>);
 
-    // 2) Monta payload
     final idMedicamento = gerarIdMedicamento(
       nomeMedicamento, concentracaoMedicamento, tipoMedicamento,
     );
@@ -681,7 +633,7 @@ class SalvarTratamento {
           : (datas.isNotEmpty ? Timestamp.fromDate(datas.last) : null),
       'observacoes': observacoes,
       'tipoFrequencia': tipoFrequencia,
-      'status': 'ativo', // preserve se quiser: leia o doc atual e reaplique
+      'status': 'ativo',
       'unidadeMedida': unidadeMedida,
       'lembretes': resumo,
       'renovacaoAutomatica': isContinuo,
@@ -692,17 +644,33 @@ class SalvarTratamento {
       'pendingSync': usuarioProvider.isContextoSouEu ? false : true,
     };
 
-    // 3) Atualiza tratamento
-    await docTrat.update(payloadTrat);
+    final docTrat = firestore
+        .collection('usuarios').doc(idUsuario)
+        .collection('tratamentos').doc(idTratamento);
 
-    // 4) Regrava lembretes e notificações
+    final wroteOnline = await _tryWrite(() async {
+      await docTrat.update(payloadTrat);
+    });
+
+    if (!wroteOnline) {
+      final localDoc = Map<String, dynamic>.from(payloadTrat)
+        ..['__localId'] = idTratamento
+        ..['pendingSync'] = true;
+      _upsertProviderTratamentoLocal(
+        idUsuario: idUsuario,
+        idTratamento: idTratamento,
+        tratamentoDoc: localDoc,
+      );
+      unawaited(docTrat.set(localDoc, SetOptions(merge: true)));
+    }
+
     await _gravarLembretesENotificacoes(
       idUsuario: idUsuario,
       idTratamento: idTratamento,
       datasLembretes: datas,
+      isOffline: !wroteOnline,
     );
 
-    // 5) Estoque (se informado)
     await _salvarEstoque(
       firestore: firestore,
       usuarioProvider: usuarioProvider,
@@ -711,15 +679,14 @@ class SalvarTratamento {
       qtdMedicamentoEstoqueCtrl: qtdMedicamentoEstoqueCtrl,
       qtdEstoqueMinimoCtrl: qtdEstoqueMinimoCtrl,
       dataValidadeCtrl: dataValidadeCtrl,
+      isOffline: !wroteOnline,
     );
   }
 
   Map<String, dynamic> _calcularPlanoLembretesMap() {
-    // Base
     final DateTime data = _parseDate(dataInicial);
     final DateTime dataHoraInicioIntervalo = _safeStartInterval(data);
 
-    // total de doses (modo não-contínuo)
     final qtdPorDose = _parseIntSafe(qtdMedicamento, fallback: 1);
     final totalUnidades = _parseIntSafe(qtdMedicamentoTotal, fallback: 0);
     final int totalDoses = (qtdPorDose <= 0) ? 0 : (totalUnidades / qtdPorDose).floor();
@@ -734,9 +701,8 @@ class SalvarTratamento {
     final List<Map<String, dynamic>> resumo = [];
 
     if (isContinuo) {
-      // Janela de pré-geração
-      final DateTime endDia  = DateTime(data.year, data.month, data.day)
-          .add(Duration(days: janelaPreGeracaoDias - 1));
+      final DateTime endDia =
+      DateTime(data.year, data.month, data.day).add(Duration(days: janelaPreGeracaoDias - 1));
       final DateTime endIncl = _endOfDay(endDia);
 
       if (isFixos) {
@@ -774,7 +740,6 @@ class SalvarTratamento {
         resumo.add({'tipo': tipoTratamento ?? '', 'valor': frequenciaHoras, 'momento': ''});
       }
     } else {
-      // Determinado / Dose única (usa TOTAL de doses)
       if (isFixos) {
         datasLembretes = _gerarLembretesFixos(
           dataInicialDate: data,
@@ -801,7 +766,8 @@ class SalvarTratamento {
       } else {
         final int freqHoras = _parseIntSafe(frequenciaHoras, fallback: 8);
         final nowPlus1 = DateTime.now().add(const Duration(minutes: 1));
-        final inicio = dataHoraInicioIntervalo.isBefore(nowPlus1) ? nowPlus1 : dataHoraInicioIntervalo;
+        final inicio =
+        dataHoraInicioIntervalo.isBefore(nowPlus1) ? nowPlus1 : dataHoraInicioIntervalo;
 
         datasLembretes = List.generate(
           totalDoses,
@@ -814,46 +780,45 @@ class SalvarTratamento {
     }
 
     return {
-      'datas': datasLembretes,                       // List<DateTime>
-      'freq': freqStr,                               // String
-      'resumo': resumo,                              // List<Map<String,dynamic>>
-      'isRefeicao': isRefeicaoSelecionada,           // bool
+      'datas': datasLembretes,
+      'freq': freqStr,
+      'resumo': resumo,
+      'isRefeicao': isRefeicaoSelecionada,
     };
   }
+
   Future<void> _gravarLembretesENotificacoes({
     required String idUsuario,
     required String idTratamento,
     required List<DateTime> datasLembretes,
+    bool isOffline = false,
   }) async {
-
-
-    // limpa antigos (útil na edição)
-    final antigos = await firestore
-        .collection('usuarios').doc(idUsuario)
-        .collection('lembretes')
-        .where('idTratamento', isEqualTo: idTratamento)
-        .get();
-
-    for (final d in antigos.docs) {
-      try { await d.reference.delete(); } catch (_) {}
+    // limpa antigos (sem travar offline)
+    try {
+      final antigos = await firestore
+          .collection('usuarios').doc(idUsuario)
+          .collection('lembretes')
+          .where('idTratamento', isEqualTo: idTratamento)
+          .get(const GetOptions(source: Source.serverAndCache));
+      for (final d in antigos.docs) {
+        try { await d.reference.delete().timeout(writeTimeout); } catch (_) {}
+      }
+    } catch (_) {
+      // offline sem cache prévio -> ignora
     }
 
-    // cria novos + notifica
-    final List<Future<void>> pend = [];
-
-    final horariosRefeicoesProvider = usuarioProvider.horariosRefeicoes;
-    final bool isRefeicao =
-        tipoFrequencia == 'Junto com Refeições' && refeicoesSelecionadas.isNotEmpty;
     for (final dt in datasLembretes) {
       final doc = firestore
           .collection('usuarios').doc(idUsuario)
           .collection('lembretes').doc();
 
-      final idNotif = doc.id.hashCode.abs(); // usa como ID local determinístico
+      final idNotif = doc.id.hashCode.abs();
 
-      final String? momentoInferido = isRefeicao
-          ? _inferirMomentoRefeicao(dt, horariosRefeicoesProvider)
+      final String? momentoInferido = (tipoFrequencia == 'Junto com Refeições' &&
+          refeicoesSelecionadas.isNotEmpty)
+          ? _inferirMomentoRefeicao(dt, usuarioProvider.horariosRefeicoes)
           : null;
+
       final lembrete = {
         'idTratamento': idTratamento,
         'dataHoraAgendado': Timestamp.fromDate(dt),
@@ -864,12 +829,10 @@ class SalvarTratamento {
         'notificado': false,
         'idNovoLembrete': '',
         'refeicao': momentoInferido,
-        'momento': null,         // idem
+        'momento': null,
         'idNotificacao': idNotif,
         'tipoTratamento': tipoTratamento,
         'tipoFrequencia': tipoFrequencia,
-
-        // NOVO:
         'scheduleVersion': 1,
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': _updatedBy(usuarioProvider.isContextoSouEu ? 'patient' : 'caregiver'),
@@ -877,18 +840,90 @@ class SalvarTratamento {
         'status': 'ativo',
       };
 
-      await doc.set(lembrete);
+      final wroteOnline = await _tryWrite(() async {
+        await doc.set(lembrete);
+      });
+
+      if (!wroteOnline) {
+        final localId = 'local_${doc.id}';
+        final local = Map<String, dynamic>.from(lembrete)
+          ..['__localId'] = localId
+          ..['pendingSync'] = true;
+        _upsertProviderLembreteLocal(
+          idUsuario: idUsuario,
+          idLembrete: localId,
+          lembreteDoc: local,
+        );
+        unawaited(doc.set(local, SetOptions(merge: true)));
+      }
 
       if (usuarioProvider.isContextoSouEu) {
-        // agenda no device do paciente imediatamente
         await NotificationService().scheduleNotification(
           id: idNotif,
           title: 'Hora do medicamento',
-          body: '${nomeMedicamento} ${concentracaoMedicamento} ($qtdMedicamento $unidadeMedida)',
+          body:
+          '${nomeMedicamento} ${concentracaoMedicamento} ($qtdMedicamento $unidadeMedida)',
           scheduledDateTime: dt,
           idLembrete: doc.id,
           idUsuario: idUsuario,
         );
       }
     }
-}}
+  }
+
+  Future<void> _salvarEstoque({
+    required FirebaseFirestore firestore,
+    required UsuarioProvider usuarioProvider,
+    required String idUsuario,
+    required String idMedicamento,
+    required String qtdMedicamentoEstoqueCtrl,
+    required String qtdEstoqueMinimoCtrl,
+    required String dataValidadeCtrl,
+    bool isOffline = false,
+  }) async {
+    final String sQtdAtual = qtdMedicamentoEstoqueCtrl.trim();
+    final String sQtdMin = qtdEstoqueMinimoCtrl.trim();
+    final String sValidade = dataValidadeCtrl.trim();
+
+    if (sQtdAtual.isEmpty) return;
+
+    final Map<String, dynamic> novoEstoque = {
+      'qtdAtual': int.tryParse(sQtdAtual) ?? 0,
+    };
+
+    final int? qtdMinimaParsed = sQtdMin.isNotEmpty ? int.tryParse(sQtdMin) : null;
+    if (qtdMinimaParsed != null) {
+      novoEstoque['qtdMinima'] = qtdMinimaParsed;
+    }
+
+    if (sValidade.isNotEmpty) {
+      try {
+        final dt = DateFormat('dd/MM/yyyy').parseStrict(sValidade);
+        novoEstoque['dataValidade'] = dt;
+      } catch (_) {}
+    }
+
+    final estoqueRef = firestore
+        .collection('usuarios')
+        .doc(idUsuario)
+        .collection('estoque')
+        .doc(idMedicamento);
+
+    final wroteOnline = await _tryWrite(() async {
+      await estoqueRef.set(novoEstoque, SetOptions(merge: true));
+    });
+
+    if (!wroteOnline) {
+      // Aplica no provider e tenta cache
+      _upsertProviderEstoqueLocal(idMedicamento: idMedicamento, estoqueDoc: novoEstoque);
+      unawaited(estoqueRef.set(novoEstoque, SetOptions(merge: true)));
+    }
+  }
+
+  String gerarIdMedicamento(String nome, String conc, String tipo) {
+    final normalized = [nome, conc, tipo]
+        .map((s) => removeDiacritics(s).toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' '))
+        .join('|');
+    return normalized.toString();
+  }
+}
