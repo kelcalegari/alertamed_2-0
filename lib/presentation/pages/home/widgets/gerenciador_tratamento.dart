@@ -80,32 +80,8 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
     'mL',
     'L',
     'UI',
-    'un',
-    'comp',
-    'cáps',
-    'gota',
-    'env',
-    'flacon',
-    'frasco',
-    'ampola',
   ];
-  String? _selectedUnidadesMedidaLembrete;
-  final _vectorUnidadesMedidaLembrete = [
-    'mg',
-    'g',
-    'mcg',
-    'mL',
-    'L',
-    'UI',
-    'un',
-    'comp',
-    'cáps',
-    'gota',
-    'env',
-    'flacon',
-    'frasco',
-    'ampola',
-  ];
+
   String? _selectedTipoTratamento;
   final _vectorTipoTratamento = [
     'Tratamento Determinado',
@@ -141,7 +117,6 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
     super.initState();
     _selectedTipo = _vectorTipo.first;
     _selectedUnidadesMedida = _vectorUnidadesMedida.first;
-    _selectedUnidadesMedidaLembrete = _vectorUnidadesMedidaLembrete.first;
     _selectedTipoTratamento = _vectorTipoTratamento.first;
     _selectedTipoFrequencia = _vectorTipoFrequencia.first;
     _selectedCompartilharTratamento = _vectorCompartilharTratamento.first;
@@ -156,7 +131,7 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       end: const Offset(0, -0.2),
     ).animate(CurvedAnimation(parent: _animationController, curve: Curves.easeInOut));
 
-    Future.delayed(const Duration(seconds: 10), () {
+    Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() => _showHint = false);
         _animationController.stop();
@@ -202,7 +177,7 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
 
       if (!mounted) return;
       if (doc.exists) {
-        final data = (doc.data() ?? {}) as Map<String, dynamic>;
+        final data = (doc.data() ?? {});
         _aplicarPrefillEstoque(data);
 
         // opcional: cache local
@@ -383,9 +358,9 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
         _prefillEstoqueSeDisponivel();
       }
       if (_currentIndex == 1) {
-        _calcularAgendamento();
         final isValid = _formKeyIndexDois.currentState?.validate() ?? false;
         if (!isValid) return;
+        _calcularAgendamento();
       }
 
       setState(() => _currentIndex++);
@@ -513,14 +488,8 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       horaInicialCtrl: _horaInicialCtrl,
       dataInicialCtrl: _dataInicialCtrl,
       dataFinalCtrl: _dataFinalCtrl,
-      selectedUnidadesMedidaLembrete: _selectedUnidadesMedidaLembrete,
-      vectorUnidadesMedidaLembrete: _vectorUnidadesMedidaLembrete,
+
       selectedTipoTratamento: _selectedTipoTratamento ?? "",
-      onSelectedUnidadesMedidaLembreteChanged: (value) {
-        setState(() {
-          _selectedUnidadesMedidaLembrete = value;
-        });
-      },
       selectedTipoFrequencia: _selectedTipoFrequencia ?? '',
       onHorariosFixosChanged: (horas) {
         setState(() {
@@ -940,7 +909,6 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       qtdMedicamentoEstoqueCtrl: _qtdMedicamentoEstoqueCtrl.text.trim(),
       qtdEstoqueMinimoCtrl: _qtdEstoqueMinimoCtrl.text.trim(),
       dataValidadeCtrl: _dataValidadeCtrl.text.trim(),
-      unidadeMedida: _selectedUnidadesMedidaLembrete ?? "",
       tipoFrequencia: _selectedTipoFrequencia ?? "",
       refeicoesSelecionadas: _refeicoesSelecionadas,
       isContinuo: _selectedTipoTratamento == 'Tratamento Contínuo',
@@ -955,6 +923,7 @@ class _GerenciadorTratamentoState extends State<GerenciadorTratamento>
       }
       widget.onConcluir();
     } catch (e) {
+      print(e);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Erro ao salvar tratamento')),
       );

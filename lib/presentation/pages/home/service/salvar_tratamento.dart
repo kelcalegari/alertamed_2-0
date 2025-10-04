@@ -23,7 +23,6 @@ class SalvarTratamento {
   final String qtdMedicamentoEstoqueCtrl;
   final String qtdEstoqueMinimoCtrl;
   final String dataValidadeCtrl;            // dd/MM/yyyy
-  final String unidadeMedida;
   final String tipoFrequencia;
   final UsuarioProvider usuarioProvider;
   final bool isContinuo;
@@ -49,7 +48,6 @@ class SalvarTratamento {
     required this.qtdEstoqueMinimoCtrl,
     required this.dataValidadeCtrl,
     required this.usuarioProvider,
-    required this.unidadeMedida,
     required this.horariosFixos,
     required this.tipoFrequencia,
     required this.refeicoesSelecionadas,
@@ -539,7 +537,6 @@ class SalvarTratamento {
       'idCuidador': idCuidador ?? '',
       'observacoes': observacoes,
       'tipoTratamento': tipoTratamento ?? '',
-      'unidadeMedida': unidadeMedida,
       'status': 'ativo',
       'tipoFrequencia': tipoFrequencia,
       'renovacaoAutomatica': isContinuo,
@@ -634,7 +631,6 @@ class SalvarTratamento {
       'observacoes': observacoes,
       'tipoFrequencia': tipoFrequencia,
       'status': 'ativo',
-      'unidadeMedida': unidadeMedida,
       'lembretes': resumo,
       'renovacaoAutomatica': isContinuo,
       'janelaDias': isContinuo ? janelaPreGeracaoDias : null,
@@ -696,13 +692,36 @@ class SalvarTratamento {
         tipoFrequencia == 'Junto com Refeições' &&
         refeicoesSelecionadas.isNotEmpty;
 
+    // ===== Helpers p/ ordem e formatação =====
+    List<String> _ordenaHorarios(List<String> hhmm) =>
+        [...hhmm]..sort((a, b) => a.compareTo(b));
+
+    const _ordemRefeicoes = ['cafe', 'almoco', 'jantar'];
+    const _labelRefeicoes = {
+      'cafe': 'Café da manhã',
+      'almoco': 'Almoço',
+      'jantar': 'Jantar',
+    };
+    List<String> _ordenaRefeicoes(List<String> ids) =>
+        [...ids]..sort((a, b) => _ordemRefeicoes.indexOf(a).compareTo(_ordemRefeicoes.indexOf(b)));
+
+    String _freqIntervaloStr(int h) =>
+        h == 1 ? "A cada 1 hora" : "A cada ${h} horas";
+
+    String _freqFixosStr(List<String> hhmmOrd) =>
+        "${hhmmOrd.length}x ao dia: ${hhmmOrd.join(', ')}";
+
+    String _freqRefeicoesStr(List<String> idsOrd) =>
+        "${idsOrd.length}x ao dia: ${idsOrd.map((r) => _labelRefeicoes[r] ?? r).join(', ')}";
+
+    // =========================================
+
     late final List<DateTime> datasLembretes;
     late final String freqStr;
     final List<Map<String, dynamic>> resumo = [];
-
     if (isContinuo) {
-      final DateTime endDia =
-      DateTime(data.year, data.month, data.day).add(Duration(days: janelaPreGeracaoDias - 1));
+      final DateTime endDia = DateTime(data.year, data.month, data.day)
+          .add(Duration(days: janelaPreGeracaoDias - 1));
       final DateTime endIncl = _endOfDay(endDia);
 
       if (isFixos) {
@@ -711,9 +730,11 @@ class SalvarTratamento {
           horariosHHmm: horariosFixos,
           endIncl: endIncl,
         );
-        final dosesPorDia = horariosFixos.length;
-        freqStr = "${dosesPorDia}x ao dia";
-        for (final h in horariosFixos) {
+
+        final ord = _ordenaHorarios(horariosFixos);
+        freqStr = _freqFixosStr(ord);
+
+        for (final h in ord) {
           resumo.add({'tipo': tipoTratamento ?? '', 'valor': h, 'momento': ''});
         }
       } else if (isRefeicaoSelecionada) {
@@ -724,8 +745,11 @@ class SalvarTratamento {
           horariosRefeicoesProvider: horariosRefeicoesProvider,
           endIncl: endIncl,
         );
-        freqStr = "${refeicoesSelecionadas.length}x ao dia";
-        for (final r in refeicoesSelecionadas) {
+
+        final ord = _ordenaRefeicoes(refeicoesSelecionadas);
+        freqStr = _freqRefeicoesStr(ord);
+
+        for (final r in ord) {
           resumo.add({'tipo': tipoTratamento ?? '', 'valor': 'refeicao', 'momento': r});
         }
       } else {
@@ -735,9 +759,9 @@ class SalvarTratamento {
           freqHoras: freqHoras,
           endIncl: endIncl,
         );
-        final porDia = (24 / (freqHoras <= 0 ? 24 : freqHoras)).round();
-        freqStr = "${porDia}x ao dia";
-        resumo.add({'tipo': tipoTratamento ?? '', 'valor': frequenciaHoras, 'momento': ''});
+
+        freqStr = _freqIntervaloStr(freqHoras);
+        resumo.add({'tipo': tipoTratamento ?? '', 'valor': freqHoras.toString(), 'momento': ''});
       }
     } else {
       if (isFixos) {
@@ -746,9 +770,11 @@ class SalvarTratamento {
           horariosHHmm: horariosFixos,
           totalDoses: totalDoses,
         );
-        final dosesPorDia = horariosFixos.length;
-        freqStr = "${dosesPorDia}x ao dia";
-        for (final h in horariosFixos) {
+
+        final ord = _ordenaHorarios(horariosFixos);
+        freqStr = _freqFixosStr(ord);
+
+        for (final h in ord) {
           resumo.add({'tipo': tipoTratamento ?? '', 'valor': h, 'momento': ''});
         }
       } else if (isRefeicaoSelecionada) {
@@ -759,25 +785,29 @@ class SalvarTratamento {
           horariosRefeicoesProvider: horariosRefeicoesProvider,
           totalDoses: totalDoses,
         );
-        freqStr = "${refeicoesSelecionadas.length}x ao dia (refeições)";
-        for (final r in refeicoesSelecionadas) {
+
+        final ord = _ordenaRefeicoes(refeicoesSelecionadas);
+        freqStr = _freqRefeicoesStr(ord);
+
+        for (final r in ord) {
           resumo.add({'tipo': tipoTratamento ?? '', 'valor': 'refeicao', 'momento': r});
         }
       } else {
         final int freqHoras = _parseIntSafe(frequenciaHoras, fallback: 8);
         final nowPlus1 = DateTime.now().add(const Duration(minutes: 1));
-        final inicio =
-        dataHoraInicioIntervalo.isBefore(nowPlus1) ? nowPlus1 : dataHoraInicioIntervalo;
+        final inicio = dataHoraInicioIntervalo.isBefore(nowPlus1) ? nowPlus1 : dataHoraInicioIntervalo;
 
         datasLembretes = List.generate(
           totalDoses,
               (i) => inicio.add(Duration(hours: i * freqHoras)),
         );
-        final porDia = (24 / (freqHoras <= 0 ? 24 : freqHoras)).round();
-        freqStr = "${porDia}x ao dia";
-        resumo.add({'tipo': tipoTratamento ?? '', 'valor': frequenciaHoras, 'momento': ''});
+
+        // mantém coerência textual com contínuo (evita "Xx ao dia" divergente)
+        freqStr = _freqIntervaloStr(freqHoras);
+        resumo.add({'tipo': tipoTratamento ?? '', 'valor': freqHoras.toString(), 'momento': ''});
       }
     }
+
 
     return {
       'datas': datasLembretes,
@@ -862,7 +892,7 @@ class SalvarTratamento {
           id: idNotif,
           title: 'Hora do medicamento',
           body:
-          '${nomeMedicamento} ${concentracaoMedicamento} ($qtdMedicamento $unidadeMedida)',
+          '${nomeMedicamento} ${concentracaoMedicamento} ($qtdMedicamento $tipoMedicamento)',
           scheduledDateTime: dt,
           idLembrete: doc.id,
           idUsuario: idUsuario,

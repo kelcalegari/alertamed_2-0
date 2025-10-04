@@ -71,12 +71,12 @@ class LembreteService {
     final nome = (t['nomeMedicamento'] ?? '').toString();
     final conc = (t['concentracaoMedicamento'] ?? '').toString();
     final dose = (t['dosagem'] ?? '').toString();
-    final un = (t['unidadeMedida'] ?? '').toString();
+    final tm = (t['tipoMedicamento'] ?? '').toString();
     if (nome.isNotEmpty &&
         conc.isNotEmpty &&
         dose.isNotEmpty &&
-        un.isNotEmpty) {
-      return '$nome $conc ($dose $un)';
+        tm.isNotEmpty) {
+      return '$nome $conc ($dose $tm)';
     }
     // fallback enxuto
     return 'Lembrete de medicamento';
@@ -274,7 +274,7 @@ class LembreteService {
       decremento: _parseDosagemSeguro(
         provider.tratamentosMap,
         idTratamento,
-      ), // ou outra quantidade por dose
+      ),
     );
 
     try {
@@ -290,7 +290,7 @@ class LembreteService {
             idUsuario: idUsuario,
             idTratamento: idTratamento,
             referencia:
-                agendado, // <<< AQUI: usa a data agendada daquele lembrete
+                agendado,
           );
         }
       }
@@ -303,7 +303,7 @@ class LembreteService {
         .update({
           'pendingSync': false,
           'updatedAt': FieldValue.serverTimestamp(),
-          'updatedBy': {'uid': idUsuario, 'role': 'patient'},
+          'updatedBy': _updatedBy('paciente', idUsuario),
         });
 
     await _finalizarSeUltimo(
@@ -477,7 +477,7 @@ class LembreteService {
           'scheduleVersion': 1,
           'updatedAt': FieldValue.serverTimestamp(),
           'updatedBy': _updatedBy(
-            isContextoSouEu ? 'patient' : 'caregiver',
+            isContextoSouEu ? 'paciente' : 'cuidador',
             provider.userId,
           ),
           'pendingSync': isContextoSouEu ? false : true,
@@ -548,7 +548,7 @@ class LembreteService {
         'scheduleVersion': 1,
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': _updatedBy(
-          isContextoSouEu ? 'patient' : 'caregiver',
+          isContextoSouEu ? 'paciente' : 'cuidador',
           provider.userId,
         ),
         'pendingSync': isContextoSouEu ? false : true,
@@ -567,7 +567,7 @@ class LembreteService {
             'scheduleVersion': 1,
             'updatedAt': FieldValue.serverTimestamp(),
             'updatedBy': _updatedBy(
-              isContextoSouEu ? 'patient' : 'caregiver',
+              isContextoSouEu ? 'paciente' : 'cuidador',
               provider.userId,
             ),
             'pendingSync': isContextoSouEu ? false : true,
@@ -643,7 +643,7 @@ class LembreteService {
             'scheduleVersion': 1,
             'updatedAt': FieldValue.serverTimestamp(),
             'updatedBy': _updatedBy(
-              provider.isContextoSouEu ? 'patient' : 'caregiver',
+              provider.isContextoSouEu ? 'paciente' : 'cuidador',
               provider.userId,
             ),
             'pendingSync': provider.isContextoSouEu ? false : true,
@@ -757,7 +757,7 @@ class LembreteService {
           'scheduleVersion': 1,
           'updatedAt': FieldValue.serverTimestamp(),
           'updatedBy': _updatedBy(
-            provider.isContextoSouEu ? 'patient' : 'caregiver',
+            provider.isContextoSouEu ? 'paciente' : 'cuidador',
             provider.userId,
           ),
           'pendingSync': provider.isContextoSouEu ? false : true,
@@ -838,7 +838,7 @@ class LembreteService {
         'scheduleVersion': 1,
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': _updatedBy(
-          provider.isContextoSouEu ? 'patient' : 'caregiver',
+          provider.isContextoSouEu ? 'paciente' : 'cuidador',
           provider.userId,
         ),
         'pendingSync': provider.isContextoSouEu ? false : true,
@@ -970,7 +970,7 @@ class LembreteService {
           'scheduleVersion': 1,
           'updatedAt': FieldValue.serverTimestamp(),
           'updatedBy': _updatedBy(
-            provider.isContextoSouEu ? 'patient' : 'caregiver',
+            provider.isContextoSouEu ? 'paciente' : 'cuidador',
             provider.userId,
           ),
           'pendingSync': provider.isContextoSouEu ? false : true,
@@ -980,13 +980,13 @@ class LembreteService {
         try {
           if (provider.isContextoSouEu) {
             await notif.scheduleNotification(
-            id: idNotif,
-            title: 'Hora do medicamento',
-            body: body,
-            scheduledDateTime: ts,
-            idLembrete: doc.id,
-            idUsuario: idUsuario,
-          );
+              id: idNotif,
+              title: 'Hora do medicamento',
+              body: body,
+              scheduledDateTime: ts,
+              idLembrete: doc.id,
+              idUsuario: idUsuario,
+            );
           }
         } catch (_) {}
       }
@@ -1111,7 +1111,7 @@ class LembreteService {
           'scheduleVersion': 1,
           'updatedAt': FieldValue.serverTimestamp(),
           'updatedBy': _updatedBy(
-            provider.isContextoSouEu ? 'patient' : 'caregiver',
+            provider.isContextoSouEu ? 'paciente' : 'cuidador',
             provider.userId,
           ),
           'pendingSync': provider.isContextoSouEu ? false : true,

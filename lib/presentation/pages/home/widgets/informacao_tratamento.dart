@@ -63,7 +63,7 @@ class InformacaoTratamento extends StatelessWidget {
     return ls;
   }
 
-  /// Caso "Junto com Refeições": ["Café", "Almoço", "Jantar", ...]
+
   List<String> _formatRefeicoes(Map<String, dynamic> t) {
     final refeicoes = _lembretesDo(t)
         .map((e) => (e['momento'] ?? '').toString().trim().toLowerCase())
@@ -71,7 +71,7 @@ class InformacaoTratamento extends StatelessWidget {
         .toSet()
         .toList();
 
-    // ordem canônica
+
     const ordem = [
       'cafe',
       'lanche_manha',
@@ -97,11 +97,11 @@ class InformacaoTratamento extends StatelessWidget {
   String? _formatIntervalo(Map<String, dynamic> t) {
     final lembretes = _lembretesDo(t);
     if (lembretes.isEmpty) return null;
-    // costuma vir em lembretes[0].valor = "8" (horas)
+
     final raw = (lembretes.first['valor'] ?? '').toString().trim();
     final num? horas = num.tryParse(raw);
     if (horas == null || horas <= 0) return null;
-    // arredonda para apresentação
+
     if (horas % 1 == 0) {
       return 'a cada ${horas.toInt()}h';
     } else {
@@ -123,7 +123,7 @@ class InformacaoTratamento extends StatelessWidget {
     final String concentracaoMedicamento = (tratamento['concentracaoMedicamento'] ?? '').toString();
     final String tipoMedicamento = (tratamento['tipoMedicamento'] ?? '').toString();
     final String dosagem = (tratamento['dosagem'] ?? '').toString();
-    final String unidadeMedida = (tratamento['unidadeMedida'] ?? '').toString();
+
     final String frequencia = (tratamento['frequencia'] ?? '').toString();
     final String tipoFrequencia = (tratamento['tipoFrequencia'] ?? '').toString();
 
@@ -151,9 +151,7 @@ class InformacaoTratamento extends StatelessWidget {
     final intervalo = isIntervalo ? _formatIntervalo(tratamento) : null;
     final bool hasEstoque = estoque != null;
 
-    final bool podeEditarOuConcluir =
-        (usuarioProvider.isContextoSouEu && !usuarioProvider.bloquearEdicaoPorPoliticaDoCuidador) ||
-            (!usuarioProvider.isContextoSouEu && !usuarioProvider.isPacienteComVisualizacao);
+
     return GestureDetector(
       onVerticalDragUpdate: (details) {
         if (details.primaryDelta != null && details.primaryDelta! > 10) {
@@ -239,9 +237,8 @@ class InformacaoTratamento extends StatelessWidget {
 
                         _InfoRow(
                           label: 'Dosagem',
-                          // Se a tua "dosagem" já representa quantidade (ex.: "1"),
-                          // a unidade real de tomada costuma ser "unidadeMedida" (ex.: "comp")
-                          value: unidadeMedida.isEmpty ? dosagem : '$dosagem $unidadeMedida',
+
+                          value: tipoMedicamento.isEmpty ? dosagem : '$dosagem $tipoMedicamento',
                           color: AppColors.textBranco,
                         ),
                         _InfoRow(
@@ -349,24 +346,18 @@ class InformacaoTratamento extends StatelessWidget {
                         const SizedBox(height: 12),
                         _InfoRow(
                           label: 'Quantidade',
-                          value: estoque != null
-                              ? '${estoque['qtdAtual'].toString()} $tipoMedicamento'
-                              : '',
+                          value: '${estoque['qtdAtual'].toString()} $tipoMedicamento',
                           color: AppColors.textVerde,
                         ),
                         _InfoRow(
                           label: 'Avisar em',
-                          value: estoque != null
-                              ? '${estoque['qtdMinima'].toString()} $tipoMedicamento'
-                              : '',
+                          value: '${estoque['qtdMinima'].toString()} $tipoMedicamento',
                           color: AppColors.textVerde,
                         ),
                         _InfoRow(
                           label: 'Validade',
-                          value: estoque != null
-                              ? DateFormat('dd/MM/yyyy')
-                              .format((estoque['dataValidade'] as Timestamp).toDate())
-                              : '-',
+                          value: DateFormat('dd/MM/yyyy')
+                              .format((estoque['dataValidade'] as Timestamp).toDate()),
                           color: AppColors.textVerde,
                         ),
                       ],
@@ -432,25 +423,7 @@ class InformacaoTratamento extends StatelessWidget {
                             ),
                           ),
                         ),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: hasEstoque ? AppColors.botoesBrancos: AppColors.botoesVerdes,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                            ),
-                            onPressed: onCancel,
-                            child: Text(
-                              'Compartilhar com Cuidador',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: hasEstoque ? AppColors.textVerde: AppColors.textBranco,
-                              ),
-                            ),
-                          ),
-                        ),
+
                       ],
                     ),
                   ),
