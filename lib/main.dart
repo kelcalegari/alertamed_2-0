@@ -86,67 +86,72 @@ class AlertaMedApp extends StatelessWidget {
 /// - Com usuário:
 ///     - Se email verificado -> Home
 ///     - Se não verificado -> VerifyEmail
-class SplashGate extends StatelessWidget {
+class SplashGate extends StatefulWidget {
   const SplashGate({super.key});
+  @override
+  State<SplashGate> createState() => _SplashGateState();
+}
+
+class _SplashGateState extends State<SplashGate> {
+  bool _gaveAuthHydrationSomeTime = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Dá um respiro de ~500ms para o Firebase hidratar o currentUser do storage
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) setState(() => _gaveAuthHydrationSomeTime = true);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
+        // Enquanto a stream está conectando OU ainda não demos tempo para hidratar, mostra splash
+        if (snap.connectionState == ConnectionState.waiting || !_gaveAuthHydrationSomeTime) {
           return const _Splash();
         }
 
-        final user = snap.data;
+        // Usa o usuário já hidratado do Firebase; não chame reload aqui
+        final user = snap.data ?? FirebaseAuth.instance.currentUser;
 
         if (user == null) {
-          // Não logado -> mostra a tela de onboarding diretamente
-          return const OnboardingPage(); // importe sua página
+          return const OnboardingPage();
         }
 
-        // Logado: recarrega o usuário só uma vez para não ficar stale
-        return FutureBuilder<void>(
-          future: user.reload(),
-          builder: (context, _) {
-            final verified = FirebaseAuth.instance.currentUser?.emailVerified ?? false;
-            if (verified) {
-              WidgetsBinding.instance.addPostFrameCallback((_) async {
-                final uid = FirebaseAuth.instance.currentUser!.uid;
+        // NÃO chame user.reload() no boot — verificação de e-mail é baseada no cache.
+        final verified = user.emailVerified;
+        if (!verified) {
+          return const VerificarEmailPage();
+        }
 
-                // Sempre registra a task do PACIENTE (lembretes, agendamentos, etc.)
-                await BgSync.register(pacienteUid: uid);
-
-                // Se também for CUIDADOR, registra a task Carewatch (atrasos dos pacientes)
-                try {
-                  final db = FirebaseFirestore.instance;
-                  final vincs = await db
-                      .collection('usuarios').doc(uid)
-                      .collection('vinculos')
-                      .where('meuPapel', isEqualTo: 'cuidador')
-                      .where('status', isEqualTo: 'ativo')
-                      .limit(1)
-                      .get(const GetOptions(source: Source.server));
-
-                  if (vincs.docs.isNotEmpty) {
-                    await CarewatchSync.register(cuidadorUid: uid);
-                  }
-                } catch (_) {
-                  // se falhar (offline, etc.), segue apenas com a task do paciente
-                }
-              });
-
-              return const HomePage();
+        // Pos-frame para registrar tasks; não depende de rede para decidir a navegação
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          final uid = user.uid;
+          await BgSync.register(pacienteUid: uid);
+          try {
+            final db = FirebaseFirestore.instance;
+            final vincs = await db
+                .collection('usuarios').doc(uid)
+                .collection('vinculos')
+                .where('meuPapel', isEqualTo: 'cuidador')
+                .where('status', isEqualTo: 'ativo')
+                .limit(1)
+                .get(const GetOptions(source: Source.server));
+            if (vincs.docs.isNotEmpty) {
+              await CarewatchSync.register(cuidadorUid: uid);
             }
-            else {
-              return const VerificarEmailPage(); // importe sua tela de verificação
-            }
-          },
-        );
+          } catch (_) {/* ignore: offline etc. */}
+        });
+
+        return const HomePage();
       },
     );
   }
 }
+
 
 
 class _Splash extends StatelessWidget {
