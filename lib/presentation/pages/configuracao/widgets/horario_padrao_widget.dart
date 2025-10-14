@@ -439,8 +439,18 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
             children: [
               OutlinedButton.icon(
                 onPressed: _adicionarDia,
-                icon: const Icon(Icons.add),
+                icon: const Icon(Icons.add, size: 18),
                 label: const Text('Adicionar dia'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: ( AppColors.textVerde),
+                  side: BorderSide(
+                    color: (AppColors.textVerde).withOpacity(0.6),
+                    width: 1.2,
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
               ),
               const Spacer(),
               FilledButton.icon(
@@ -449,7 +459,6 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
                   await provider.salvarHorariosRefeicoes(lista);
                   widget.onSaved?.call();
 
-                  // 👇 chama o service aqui
                   await LembreteService().reagendarLembretesPorRefeicaoViaLembretes(
                     context: context,
                     idUsuario: provider.userId,
@@ -460,12 +469,20 @@ class _HorariosPadraoEditorState extends State<HorariosPadraoEditor> {
                     const SnackBar(content: Text('Horários salvos!')),
                   );
                 },
-
-                icon: const Icon(Icons.save_outlined),
+                icon: const Icon(Icons.save_outlined, size: 18),
                 label: const Text('Salvar'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: (AppColors.textVerde),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  elevation: 1.5,
+                ),
               ),
             ],
-          ),
+          )
+
         ],
       ),
     );

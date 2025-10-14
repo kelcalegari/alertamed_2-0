@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import '../core/services/bg_sync.dart';
+import '../core/background/bg_sync.dart';
 import '../core/services/notification_service.dart';
 
+import 'package:workmanager/workmanager.dart';
+import '../core/background/carewatch_bg_sync.dart';
 /// Provider responsável por separar dados do usuário logado (self)
 /// e do usuário em contexto (paciente atual) + controle de permissões.
 ///
@@ -112,7 +114,7 @@ class UsuarioProvider extends ChangeNotifier {
 
       // 2) Carrega CONTEXTO (dados + permissões)
       await _fetchContextoData(ctxUid);
-
+      await carewatchScanNow();
     } finally {
       _stopPendingListeners();
       if (isContextoSouEu) _startPendingListeners();
@@ -145,25 +147,45 @@ class UsuarioProvider extends ChangeNotifier {
     // ... sua lógica
     if (isContextoSouEu && userId.isNotEmpty) {
       await BgSync.register(pacienteUid: userId);
+      await _ensureCarewatchRegisteredIfNeeded();
     }
+
     fetchData();
+  }
+
+  Future<void> _ensureCarewatchRegisteredIfNeeded() async {
+    if (userId.isEmpty) return;
+    try {
+      final qs = await FirebaseFirestore.instance
+          .collection('usuarios').doc(userId)
+          .collection('vinculos')
+          .where('meuPapel', isEqualTo: 'cuidador')
+          .where('status', isEqualTo: 'ativo')
+          .limit(1)
+          .get(const GetOptions(source: Source.server));
+      if (qs.docs.isNotEmpty) {
+        await CarewatchSync.register(cuidadorUid: userId);
+      }
+    } catch (_) {
+      // offline/erro -> ignora; próxima rodada tenta de novo
+    }
   }
 
   Future<void> logout() async {
 
-    await BgSync.cancelAll();
+    await Workmanager().cancelAll();     // cancela BgSync + CarewatchSync
 
     clearState();
   }
+
+
 
   Future<void> setContextoUsuario(String uid, {bool persist = true}) async {
     if (_contextoUsuarioId == uid) return;
 
     _contextoUsuarioId = uid;
-    await BgSync.cancelAll();
-    if (isContextoSouEu && uid.isNotEmpty) {
-      await BgSync.register(pacienteUid: uid);
-    }
+
+    await _ensureCarewatchRegisteredIfNeeded();
     notifyListeners();
 
     await _fetchContextoData(uid);
@@ -725,4 +747,205 @@ class UsuarioProvider extends ChangeNotifier {
       orElse: () => _toStringList(_defaultHorariosRefeicoes()).first,
     );
   }
+
+  /// Varre, agora, os pacientes que o LOGADO cuida e emite notificações
+  /// de lembretes atrasados (não tomados/adiados/cancelados).
+  /// Retorna a quantidade de alertas emitidos.
+  ///
+  /// Use:
+  ///   final qtd = await provider.carewatchScanNow();
+  ///   if (qtd > 0) { /* ...atualize UI, badge, etc. */ }
+  Future<int> carewatchScanNow({
+    Duration tolerancia = const Duration(minutes: 15),
+    Duration janela = const Duration(hours: 24),
+  }) async {
+    final cuidadorUid = userId.trim();
+    if (cuidadorUid.isEmpty) return 0;
+
+    // Garante notificação pronta (idempotente)
+    try { await NotificationService().init(); } catch (_) {}
+
+    final db = FirebaseFirestore.instance;
+    int totalAlertas = 0;
+
+    // 1) vínculos onde EU sou cuidador e está ativo
+    QuerySnapshot<Map<String, dynamic>> vincQs;
+    try {
+      vincQs = await db
+          .collection('usuarios').doc(cuidadorUid)
+          .collection('vinculos')
+          .where('meuPapel', isEqualTo: 'cuidador')
+          .where('status', isEqualTo: 'ativo')
+          .get(const GetOptions(source: Source.server));
+    } catch (_) {
+      // offline? tenta cache como fallback
+      vincQs = await db
+          .collection('usuarios').doc(cuidadorUid)
+          .collection('vinculos')
+          .where('meuPapel', isEqualTo: 'cuidador')
+          .where('status', isEqualTo: 'ativo')
+          .get(const GetOptions(source: Source.cache));
+    }
+    if (vincQs.docs.isEmpty) return 0;
+
+    final agora = DateTime.now();
+    final limiteInicio = agora.subtract(janela);
+
+    // cache simples de nomes públicos para evitar múltiplos gets
+    final Map<String, String> nomePacCache = {};
+    final notif = NotificationService();
+
+    Future<String> _nomePaciente(String pacienteUid) async {
+      if (nomePacCache.containsKey(pacienteUid)) return nomePacCache[pacienteUid]!;
+      try {
+        final pub = await db
+            .collection('usuarios_publicos')
+            .doc(pacienteUid)
+            .get(const GetOptions(source: Source.server));
+        final nome = (pub.data()?['displayName'] ?? 'Paciente').toString();
+        nomePacCache[pacienteUid] = nome;
+        return nome;
+      } catch (_) {
+        // fallback cache
+        try {
+          final pub = await db
+              .collection('usuarios_publicos')
+              .doc(pacienteUid)
+              .get(const GetOptions(source: Source.cache));
+          final nome = (pub.data()?['displayName'] ?? 'Paciente').toString();
+          nomePacCache[pacienteUid] = nome;
+          return nome;
+        } catch (_) {
+          return 'Paciente';
+        }
+      }
+    }
+
+    for (final vinc in vincQs.docs) {
+      final pacienteUid = vinc.id;
+      if (pacienteUid.isEmpty) continue;
+
+      // 2) Lembretes atrasados da janela (<= agora - tolerância, >= limiteInicio)
+      QuerySnapshot<Map<String, dynamic>> lembQs;
+      try {
+        lembQs = await db
+            .collection('usuarios').doc(pacienteUid)
+            .collection('lembretes')
+            .where('dataHoraAgendado',
+            isLessThanOrEqualTo:
+            Timestamp.fromDate(agora.subtract(tolerancia)))
+            .where('dataHoraAgendado',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(limiteInicio))
+            .where('tomado', isEqualTo: false)
+            .where('adiado', isEqualTo: false)
+            .where('cancelado', isEqualTo: false)
+            .limit(50)
+            .get(const GetOptions(source: Source.server));
+      } catch (_) {
+        // offline fallback
+        lembQs = await db
+            .collection('usuarios').doc(pacienteUid)
+            .collection('lembretes')
+            .where('dataHoraAgendado',
+            isLessThanOrEqualTo:
+            Timestamp.fromDate(agora.subtract(tolerancia)))
+            .where('dataHoraAgendado',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(limiteInicio))
+            .where('tomado', isEqualTo: false)
+            .where('adiado', isEqualTo: false)
+            .where('cancelado', isEqualTo: false)
+            .limit(50)
+            .get(const GetOptions(source: Source.cache));
+      }
+
+      if (lembQs.docs.isEmpty) continue;
+
+      final nomePac = await _nomePaciente(pacienteUid);
+
+      for (final d in lembQs.docs) {
+        final m = d.data();
+
+        // evita repetir alerta para o mesmo cuidador
+        final Map<String, dynamic> alertas =
+            (m['alertasCuidador'] as Map?)?.cast<String, dynamic>() ?? {};
+        if (alertas[cuidadorUid] == true) continue;
+
+        final ts = m['dataHoraAgendado'] as Timestamp?;
+        if (ts == null) continue;
+        final quando = ts.toDate();
+
+        final nomeMed = (m['nomeMedicamento'] ?? '').toString().trim();
+        final conc    = (m['concentracaoMedicamento'] ?? '').toString().trim();
+        final qtd     = (m['qtdMedicamento'] ?? '').toString().trim();
+        final unid    = (m['unidadeMedida'] ?? '').toString().trim();
+
+        String medStr =
+        [nomeMed, conc].where((s) => s.isNotEmpty).join(' ').trim();
+        final doseStr =
+        [if (qtd.isNotEmpty) qtd, if (unid.isNotEmpty) unid].join(' ').trim();
+        if (doseStr.isNotEmpty) {
+          medStr = medStr.isNotEmpty ? '$medStr ($doseStr)' : '($doseStr)';
+        }
+        if (medStr.isEmpty) medStr = 'medicamento';
+
+        final hh = quando.hour.toString().padLeft(2, '0');
+        final mm = quando.minute.toString().padLeft(2, '0');
+
+        final title = 'Atraso de medicação';
+        final body  = '$nomePac atrasou $medStr das $hh:$mm.';
+
+        // ID estável (cuidador + paciente + lembrete)
+        final idNot = _stableIdCarewatch('${cuidadorUid}::$pacienteUid::${d.id}');
+
+        // emite agora; se não conseguir, agenda +5s
+        try {
+          await notif.showNowCarewatch(
+            id: idNot,
+            title: title,
+            body: body,
+            pacienteUid: pacienteUid,
+            lembreteId: d.id,
+          );
+        } catch (_) {
+          await notif.scheduleCarewatchOneShot(
+            id: idNot,
+            title: title,
+            body: body,
+            when: DateTime.now().add(const Duration(seconds: 5)),
+            pacienteUid: pacienteUid,
+            lembreteId: d.id,
+          );
+        }
+
+        // marca para não avisar de novo este cuidador
+        try {
+          await d.reference.update({
+            'alertasCuidador.$cuidadorUid': true,
+            'alertasCuidadorAt.$cuidadorUid': FieldValue.serverTimestamp(),
+          });
+        } catch (_) {/* ignora falha de marcação */}
+
+        totalAlertas++;
+      }
+    }
+
+    return totalAlertas;
+  }
+
+  /// Hash 32-bit estável para IDs de notificação do Carewatch.
+  /// Mantém separado dos IDs dos lembretes do paciente.
+  int _stableIdCarewatch(String s) {
+    int h = 0;
+    for (int i = 0; i < s.length; i++) {
+      h = 0x1fffffff & (h + s.codeUnitAt(i));
+      h = 0x1fffffff & (h + ((0x0007ffff & h) << 10));
+      h ^= (h >> 6);
+    }
+    h = 0x1fffffff & (h + ((0x03ffffff & h) << 3));
+    h ^= (h >> 11);
+    h = 0x1fffffff & (h + ((0x00003fff & h) << 15));
+    if (h < 0) h = -h;
+    return h < 100000 ? 100000 : h; // reserva faixa alta
+  }
+
 }

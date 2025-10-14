@@ -13,11 +13,10 @@ class InformacoesAdicionais extends StatefulWidget {
   final TextEditingController observacaoCtrl;
   final String? selectedUnidadesMedida;
   final List<String> vectorUnidadesMedida;
-  final String? selectedCompartilharTratamento;
-  final List<String> vectorCompartilharTratamento;
+
   final VoidCallback onConcluir;
   final ValueChanged<String?> onUnidadesMedidaChanged;
-  final ValueChanged<String?> onCompartilharTratamentoChanged;
+
 
   /// Agora assíncrono para podermos aguardar e mostrar o loading no botão
   final Future<void> Function()? onPressedSalvar;
@@ -31,11 +30,8 @@ class InformacoesAdicionais extends StatefulWidget {
     required this.observacaoCtrl,
     required this.selectedUnidadesMedida,
     required this.vectorUnidadesMedida,
-    required this.selectedCompartilharTratamento,
-    required this.vectorCompartilharTratamento,
     required this.onConcluir,
     required this.onUnidadesMedidaChanged,
-    required this.onCompartilharTratamentoChanged,
     required this.onPressedSalvar,
   }) : super(key: key);
 
@@ -89,18 +85,6 @@ class _InformacoesAdicionaisState extends State<InformacoesAdicionais> {
                     label: "Avisar em",
                     textInputType: TextInputType.number,
                     hint: "1",
-                  ),
-                ),
-                Flexible(
-                  flex: 4,
-                  child: CustomSelectorField<String>(
-                    selectedValue: widget.selectedUnidadesMedida,
-                    items: widget.vectorUnidadesMedida
-                        .map((g) => DropdownMenuItem(value: g, child: Text(g)))
-                        .toList(),
-                    onChanged: widget.onUnidadesMedidaChanged,
-                    hint: widget.vectorUnidadesMedida.isNotEmpty ? widget.vectorUnidadesMedida[0] : "unidade",
-                    pad: 0,
                   ),
                 ),
               ],

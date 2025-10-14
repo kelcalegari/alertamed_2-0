@@ -24,6 +24,18 @@ class ChatGPTService {
       final s = v.toString().trim();
       return s.isEmpty ? '—' : s;
     }
+    DateTime? _asDate(dynamic v) {
+      if (v == null) return null;
+      if (v is Timestamp) return v.toDate();
+      if (v is DateTime) return v;
+      return null;
+    }
+
+    String _fmtDate(DateTime? dt, {String pattern = 'dd/MM/yyyy'}) {
+      if (dt == null) return '—';
+      return DateFormat(pattern, 'pt_BR').format(dt);
+    }
+
     // Filtro de sintomas dos últimos 5 dias
     final agora = DateTime.now();
     final sintomasRecentes = sintomas.where((s) {
@@ -34,7 +46,15 @@ class ChatGPTService {
     // Construção de resumo dos tratamentos ativos
     final tratamentosAtivos = tratamentosMap.values.where((t) => t['status'] == 'ativo');
     final resumoTratamentos = tratamentosAtivos.map((t) {
-      return "- ${t['nomeMedicamento']} (${t['dosagem']}, ${t['frequencia']}) de ${DateFormat('dd/MM/yyyy').format((t['dataInicio'] as Timestamp).toDate())} até ${DateFormat('dd/MM/yyyy').format((t['dataTermino'] as Timestamp).toDate())}";
+      final nome = (t['nomeMedicamento'] ?? '—').toString();
+      final dosagem = (t['dosagem'] ?? t['concentracaoMedicamento'] ?? '—').toString();
+      final freq   = (t['frequencia'] ?? '—').toString();
+
+      final inicio = _asDate(t['dataInicio']);
+      final termino = _asDate(t['dataTermino']); // pode ser null em contínuos
+      final terminoTxt = termino == null ? 'em andamento' : _fmtDate(termino);
+
+      return "- $nome ($dosagem, $freq) de ${_fmtDate(inicio)} até $terminoTxt";
     }).join('\n');
 
     // Histórico de ingestão de medicamentos

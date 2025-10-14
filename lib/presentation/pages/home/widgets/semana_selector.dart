@@ -48,65 +48,91 @@ class _NomePublico extends StatelessWidget {
 
 class SemanaSelector extends StatefulWidget {
   final Function(DateTime) onSemanaChanged;
+  final DateTime selectedDate; // ⬅️ novo (controlado pelo pai)
 
-  const SemanaSelector({Key? key, required this.onSemanaChanged})
-    : super(key: key);
+  const SemanaSelector({
+    Key? key,
+    required this.onSemanaChanged,
+    required this.selectedDate, // ⬅️ novo
+  }) : super(key: key);
 
   @override
   _SemanaSelectorState createState() => _SemanaSelectorState();
 }
 
 class _SemanaSelectorState extends State<SemanaSelector> {
-  DateTime semanaAtual = DateTime.now();
-  DateTime diaSelecionado = DateTime.now();
-  String? _usuarioContextoId;
-  List<DateTime> getDiasDaSemana() {
-    int diaSemana = semanaAtual.weekday; // 1 = segunda, 7 = domingo
-    DateTime segunda = semanaAtual.subtract(
-      Duration(days: diaSemana - 1),
-    ); // começa na segunda
+  // Semana de referência que o carrossel mostra (muda ao arrastar)
+  late DateTime semanaAtual;
 
-    return List.generate(7, (index) => segunda.add(Duration(days: index)));
+  @override
+  void initState() {
+    super.initState();
+    semanaAtual = _inicioDaSemana(widget.selectedDate);
+  }
+
+  @override
+  void didUpdateWidget(covariant SemanaSelector oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Se o pai trocou o dia (ex.: back para HOJE), sincroniza a semana exibida
+    if (!_isMesmoDia(widget.selectedDate, oldWidget.selectedDate)) {
+      setState(() {
+        semanaAtual = _inicioDaSemana(widget.selectedDate);
+      });
+    }
+  }
+
+  DateTime _inicioDaSemana(DateTime d) {
+    // 1 = seg, ... 7 = dom
+    final weekday = d.weekday;
+    return DateTime(d.year, d.month, d.day).subtract(Duration(days: weekday - 1));
+  }
+
+  bool _isMesmoDia(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  List<DateTime> getDiasDaSemana() {
+    final segunda = _inicioDaSemana(semanaAtual);
+    return List.generate(7, (i) => segunda.add(Duration(days: i)));
   }
 
   void mudarSemana(int direcao) {
     setState(() {
       semanaAtual = semanaAtual.add(Duration(days: 7 * direcao));
-      final dias = getDiasDaSemana();
-      if (!dias.any((d) => isSameDate(d, diaSelecionado))) {
-        diaSelecionado = dias[0];
-      }
     });
-    widget.onSemanaChanged(diaSelecionado);
+    // Se a nova semana não contém o dia selecionado atual, opcionalmente
+    // força o primeiro dia da semana como selecionado:
+    final dias = getDiasDaSemana();
+    if (!dias.any((d) => _isMesmoDia(d, widget.selectedDate))) {
+      widget.onSemanaChanged(dias.first); // ⬅️ atualiza no pai
+    }
   }
 
-  bool isSameDate(DateTime a, DateTime b) {
-    return a.year == b.year && a.month == b.month && a.day == b.day;
-  }
-
-  String getTituloDiaSelecionado() {
+  String getTituloDiaSelecionado(DateTime diaSelecionado) {
     final hoje = DateTime.now();
-    if (isSameDate(diaSelecionado, hoje)) {
-      return "HOJE ${diaSelecionado.day.toString().padLeft(2, '0')} DE ${DateFormat.MMMM('pt_BR').format(diaSelecionado).toUpperCase()}";
+    final fmtMes = DateFormat.MMMM('pt_BR');
+    final fmtSem = DateFormat.EEEE('pt_BR');
+    if (_isMesmoDia(diaSelecionado, hoje)) {
+      return "HOJE ${diaSelecionado.day.toString().padLeft(2, '0')} DE ${fmtMes.format(diaSelecionado).toUpperCase()}";
     } else {
-      return "${DateFormat.EEEE('pt_BR').format(diaSelecionado).toUpperCase()} ${diaSelecionado.day.toString().padLeft(2, '0')} DE ${DateFormat.MMMM('pt_BR').format(diaSelecionado).toUpperCase()}";
+      return "${fmtSem.format(diaSelecionado).toUpperCase()} ${diaSelecionado.day.toString().padLeft(2, '0')} DE ${fmtMes.format(diaSelecionado).toUpperCase()}";
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final dias = getDiasDaSemana();
+    final diaSelecionado = DateTime(widget.selectedDate.year, widget.selectedDate.month, widget.selectedDate.day);
+
     final prov = context.watch<UsuarioProvider>();
     final meuUid = prov.userId;
     final meuNome = (prov.dadosUsuario['nome'] as String?) ?? 'Você';
-    // pega vínculos onde eu sou cuidador e estão ativos
     final pacientes = prov.vinculosMap.entries
         .where((e) => (e.value['meuPapel'] == 'cuidador') && (e.value['status'] == 'ativo'))
-        .map((e) => e.key) // otherUid
+        .map((e) => e.key)
         .toList();
-    _usuarioContextoId ??= meuUid;
     final contextoId = prov.contextoUsuarioId;
     final bool isCuidador = pacientes.isNotEmpty;
+
     return Container(
       color: AppColors.background,
       padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 20),
@@ -118,15 +144,17 @@ class _SemanaSelectorState extends State<SemanaSelector> {
             children: [
               GestureDetector(
                 onLongPress: () {
+                  final hoje = DateTime.now();
+                  // Long press: força HOJE no pai
+                  widget.onSemanaChanged(DateTime(hoje.year, hoje.month, hoje.day));
+                  // E sincroniza a semana exibida
                   setState(() {
-                    diaSelecionado = DateTime.now();
-                    semanaAtual = DateTime.now();
+                    semanaAtual = _inicioDaSemana(hoje);
                   });
-                  widget.onSemanaChanged(diaSelecionado);
                 },
                 child: Text(
-                  getTituloDiaSelecionado(),
-                  style: TextStyle(
+                  getTituloDiaSelecionado(diaSelecionado),
+                  style: const TextStyle(
                     color: AppColors.textBranco,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
@@ -137,9 +165,8 @@ class _SemanaSelectorState extends State<SemanaSelector> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-
                   IconButton(
-                    icon: Icon(Icons.settings, color: AppColors.textBranco),
+                    icon: const Icon(Icons.settings, color: AppColors.textBranco),
                     onPressed: () {
                       Navigator.pushNamed(context, Routes.configuracao);
                     },
@@ -147,33 +174,27 @@ class _SemanaSelectorState extends State<SemanaSelector> {
                   if (isCuidador)
                     PopupMenuButton<String>(
                       icon: Icon(
-                        contextoId == meuUid
-                            ? Icons.account_circle_outlined  // eu mesmo
-                            : Icons.local_hospital_outlined, // paciente selecionado
+                        contextoId == meuUid ? Icons.account_circle_outlined : Icons.local_hospital_outlined,
                         color: AppColors.textBranco,
                       ),
                       color: AppColors.cardBackgroundBranco,
                       onSelected: (uidSelecionado) async {
                         await prov.setContextoUsuario(uidSelecionado);
-                        setState(() {}); // reconstrói para atualizar o ícone
+                        setState(() {}); // atualiza ícone
                       },
                       itemBuilder: (context) => [
-                        // EU
                         PopupMenuItem<String>(
                           value: meuUid,
                           child: Row(
                             children: [
                               const Icon(Icons.account_circle_outlined, size: 20),
                               const SizedBox(width: 8),
-                              Expanded(
-                                child: _NomePublico(uid: meuUid, fallback: meuNome),
-                              ),
+                              Expanded(child: _NomePublico(uid: meuUid, fallback: meuNome)),
                               if (contextoId == meuUid) const Icon(Icons.check, size: 18),
                             ],
                           ),
                         ),
                         const PopupMenuDivider(),
-                        // PACIENTES
                         ...pacientes.map((otherUid) {
                           return PopupMenuItem<String>(
                             value: otherUid,
@@ -181,9 +202,7 @@ class _SemanaSelectorState extends State<SemanaSelector> {
                               children: [
                                 const Icon(Icons.local_hospital_outlined, size: 20),
                                 const SizedBox(width: 8),
-                                Expanded(
-                                  child: _NomePublico(uid: otherUid, fallback: otherUid),
-                                ),
+                                Expanded(child: _NomePublico(uid: otherUid, fallback: otherUid)),
                                 if (contextoId == otherUid) const Icon(Icons.check, size: 18),
                               ],
                             ),
@@ -195,8 +214,7 @@ class _SemanaSelectorState extends State<SemanaSelector> {
               ),
             ],
           ),
-
-          SizedBox(height: 8),
+          const SizedBox(height: 8),
           GestureDetector(
             onHorizontalDragEnd: (details) {
               if (details.primaryVelocity == null) return;
@@ -208,65 +226,46 @@ class _SemanaSelectorState extends State<SemanaSelector> {
             },
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children:
-                  dias.map((dia) {
-                    final bool isSelecionado = isSameDate(dia, diaSelecionado);
-
-                    return Flexible(
-                      child: InkWell(
-                        onTap: () {
-                          setState(() {
-                            diaSelecionado = dia;
-                          });
-                          widget.onSemanaChanged(diaSelecionado);
-                        },
-                        borderRadius: BorderRadius.circular(16),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              DateFormat.E(
-                                'pt_BR',
-                              ).format(dia)[0].toUpperCase(),
-                              style: TextStyle(
-                                color: AppColors.textBranco,
-                                fontSize: 14,
-                              ),
-                            ),
-                            SizedBox(height: 4),
-                            Container(
-                              width: 36,
-                              height: 36,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color:
-                                    isSelecionado
-                                        ? AppColors.diaSelecionado
-                                        : AppColors.cardBackgroundBranco,
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              padding: EdgeInsets.symmetric(vertical: 8),
-                              child: Text(
-                                dia.day.toString(),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color:
-                                      isSelecionado
-                                          ? AppColors.textVerde
-                                          : Colors.black,
-                                  fontWeight:
-                                      isSelecionado
-                                          ? FontWeight.bold
-                                          : FontWeight.normal,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          ],
+              children: dias.map((dia) {
+                final bool isSelecionado = _isMesmoDia(dia, diaSelecionado);
+                return Flexible(
+                  child: InkWell(
+                    onTap: () {
+                      widget.onSemanaChanged(dia); // seleciona no pai
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          DateFormat.E('pt_BR').format(dia)[0].toUpperCase(),
+                          style: const TextStyle(color: AppColors.textBranco, fontSize: 14),
                         ),
-                      ),
-                    );
-                  }).toList(),
+                        const SizedBox(height: 4),
+                        Container(
+                          width: 36,
+                          height: 36,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: isSelecionado ? AppColors.diaSelecionado : AppColors.cardBackgroundBranco,
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Text(
+                            dia.day.toString(),
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: isSelecionado ? AppColors.textVerde : Colors.black,
+                              fontWeight: isSelecionado ? FontWeight.bold : FontWeight.normal,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
             ),
           ),
         ],

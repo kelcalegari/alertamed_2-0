@@ -52,8 +52,13 @@ class _CardGerarRelatorioState extends State<CardGerarRelatorio> {
     }
     _dragAccumulatedDy = 0;
   }
+  int _selectedFormatsCount() =>
+      (_optPdf ? 1 : 0) + (_optCsvTimeline ? 1 : 0) + (_optCsvResumo ? 1 : 0);
 
-  Future<void> _pickDateTime({required bool isInicio}) async {
+  bool get _canShareExactlyOne =>
+      _lastResult != null && !_isSharing && _selectedFormatsCount() == 1;
+
+  Future<void> _pickDate({required bool isInicio}) async {
     final now = DateTime.now();
     final date = await showDatePicker(
       context: context,
@@ -61,28 +66,38 @@ class _CardGerarRelatorioState extends State<CardGerarRelatorio> {
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
       helpText: isInicio ? 'Selecione a DATA inicial' : 'Selecione a DATA final',
-      confirmText: 'CONTINUAR',
-      cancelText: 'CANCELAR',
-    );
-    if (date == null) return;
-
-    final time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(isInicio ? (_inicio ?? now) : (_fim ?? now)),
-      helpText: isInicio ? 'Selecione o HORÁRIO inicial' : 'Selecione o HORÁRIO final',
       confirmText: 'OK',
       cancelText: 'CANCELAR',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: AppColors.textVerde,     // cor principal (cabeçalho, seleção)
+              onPrimary: AppColors.textBranco,  // texto dentro do botão/cabeçalho
+              surface: AppColors.cardBackgroundBranco, // fundo do calendário
+              onSurface: AppColors.textVerde,   // texto dos dias
+            ),
+            dialogBackgroundColor: AppColors.cardBackgroundBranco,
+          ),
+          child: child!,
+        );
+      },
     );
-    if (time == null) return;
 
-    final selected = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    if (date == null) return;
+
+    // início -> 00:00:00 | fim -> 23:59:59
+    final selected = isInicio
+        ? DateTime(date.year, date.month, date.day, 0, 0, 0)
+        : DateTime(date.year, date.month, date.day, 23, 59, 59);
+
     setState(() {
       if (isInicio) {
         _inicio = selected;
-        _inicioCtrl.text = _df.format(selected);
+        _inicioCtrl.text = DateFormat('dd/MM/yyyy').format(selected);
       } else {
         _fim = selected;
-        _fimCtrl.text = _df.format(selected);
+        _fimCtrl.text = DateFormat('dd/MM/yyyy').format(selected);
       }
     });
   }
@@ -110,10 +125,9 @@ class _CardGerarRelatorioState extends State<CardGerarRelatorio> {
     setState(() => _isLoading = true);
     try {
       final provider = Provider.of<UsuarioProvider>(context, listen: false);
-      final String idUsuario = provider.userId ?? '';
-      final String nomeUsuario = provider.dadosUsuario["nome"] ?? 'Usuário';
 
-      final service = RelatorioService();
+
+
       final result = await RelatorioService().gerarTimelineEResumo(
         userProv: provider,
         inicio: _inicio!,
@@ -145,49 +159,18 @@ class _CardGerarRelatorioState extends State<CardGerarRelatorio> {
     }
   }
 
-  Future<void> _salvarNoDispositivo() async {
-    if (_lastResult == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Gere os arquivos antes de salvar.')),
-      );
-      return;
-    }
-    final service = RelatorioService();
-    final paths = _lastResult!.selectedPaths(
-      pdf: _optPdf,
-      csvTimeline: _optCsvTimeline,
-      csvResumo: _optCsvResumo,
-    );
-    if (paths.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nenhum formato selecionado para salvar.')),
-      );
-      return;
-    }
-
-    setState(() => _isSaving = true);
-    try {
-      await service.salvarNoDispositivo(paths: paths); // usa file_saver (MimeType enum)
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Arquivos salvos no dispositivo.')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Falha ao salvar: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
-    }
-  }
 
   Future<void> _compartilhar() async {
     if (_lastResult == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Gere os arquivos antes de compartilhar.')),
+      );
+      return;
+    }
+
+    if (_selectedFormatsCount() != 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecione exatamente um formato para compartilhar.')),
       );
       return;
     }
@@ -294,7 +277,7 @@ class _CardGerarRelatorioState extends State<CardGerarRelatorio> {
                     ctrl: _inicioCtrl,
                     label: 'Início',
                     readOnly: true,
-                    onTap: () => _pickDateTime(isInicio: true),
+                    onTap: () => _pickDate(isInicio: true),
                     validador: (v) =>
                     (v == null || v.isEmpty) ? 'Informe a data/hora inicial' : null,
                     textInputType: TextInputType.datetime,
@@ -304,7 +287,7 @@ class _CardGerarRelatorioState extends State<CardGerarRelatorio> {
                     ctrl: _fimCtrl,
                     label: 'Fim',
                     readOnly: true,
-                    onTap: () => _pickDateTime(isInicio: false),
+                    onTap: () => _pickDate(isInicio: false),
                     validador: (v) =>
                     (v == null || v.isEmpty) ? 'Informe a data/hora final' : null,
                     textInputType: TextInputType.datetime,
@@ -435,7 +418,7 @@ class _CardGerarRelatorioState extends State<CardGerarRelatorio> {
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
-                          onPressed: (_lastResult == null || _isSharing) ? null : _compartilhar,
+                          onPressed: _canShareExactlyOne ? _compartilhar : null,
                           label: const Text(
                             'Compartilhar',
                             style: TextStyle(

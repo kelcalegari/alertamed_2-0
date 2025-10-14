@@ -16,7 +16,7 @@ class SalvarTratamento {
   final String frequenciaHoras;             // usado no modo intervalo
   final String dataInicial;                 // dd/MM/yyyy
   final String horaInicial;                 // HH:mm (modo intervalo)
-  final String? idCuidador;
+
   final String observacoes;
   final String? tipoTratamento;
   final List<String> horariosFixos;         // se não vazio => modo fixo
@@ -41,7 +41,6 @@ class SalvarTratamento {
     required this.frequenciaHoras,
     required this.dataInicial,
     required this.horaInicial,
-    this.idCuidador,
     required this.observacoes,
     required this.tipoTratamento,
     required this.qtdMedicamentoEstoqueCtrl,
@@ -361,7 +360,7 @@ class SalvarTratamento {
     }
 
     final agora = DateTime.now();
-    final limite = agora.add(const Duration(minutes: 10));
+    final limite = agora.add(const Duration(minutes: 5));
     final baseDia0 = DateTime(dataInicialDate.year, dataInicialDate.month, dataInicialDate.day);
     final isDia0Hoje =
         baseDia0.year == agora.year && baseDia0.month == agora.month && baseDia0.day == agora.day;
@@ -534,7 +533,6 @@ class SalvarTratamento {
           ? null
           : (datas.isNotEmpty ? Timestamp.fromDate(datas.last) : null),
       'lembretes': resumo,
-      'idCuidador': idCuidador ?? '',
       'observacoes': observacoes,
       'tipoTratamento': tipoTratamento ?? '',
       'status': 'ativo',
@@ -617,8 +615,6 @@ class SalvarTratamento {
       'tipoMedicamento': tipoMedicamento,
       'concentracaoMedicamento': concentracaoMedicamento,
       'dosagem': qtdMedicamento,
-      'qtdMedicamento': qtdMedicamento,
-      'qtdMedicamentoTotal': qtdMedicamentoTotal,
       'tipoTratamento': tipoTratamento,
       'frequenciaHoras': frequenciaHoras,
       'frequencia': freqStr,

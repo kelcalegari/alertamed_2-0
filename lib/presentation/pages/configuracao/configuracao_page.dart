@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../../../core/services/notification_service.dart';
 import '../../../providers/user_data_provider.dart';
 import '../../routes/routes.dart';
 import '../../shared/widgets/custom_seletor_field.dart';
@@ -63,7 +64,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
 
-    Future.delayed(const Duration(seconds: 3), () {
+    Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() {
           _showHint = false;
@@ -267,6 +268,8 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
                         await FirebaseAuth.instance.signOut();
                         context.read<UsuarioProvider>().logout();
                         if (!mounted) return;
+                        await NotificationService().cancelAll();
+
                         Navigator.pushNamed(context, Routes.onboarding);
                       },
                     ),

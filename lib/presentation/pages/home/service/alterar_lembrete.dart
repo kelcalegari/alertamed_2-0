@@ -6,53 +6,44 @@ import 'package:provider/provider.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../providers/user_data_provider.dart';
 
+/// Serviço para gestão de lembretes de tratamentos.
+/// Pontos de atenção da refatoração:
+/// - Helpers reutilizáveis (_commitInChunks, _refreshCaches, _safeCancelNotif, _safeScheduleNotif, _markMeta)
+/// - Padronização de metadados (scheduleVersion/updatedAt/updatedBy/pendingSync)
+/// - Redução de repetição em consultas/loops
+/// - Regras claras para reagendamentos por refeições e extensões automáticas
 class LembreteService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  // --------------------------- Constantes ---------------------------
+  static const _kColUsuarios = 'usuarios';
+  static const _kColLembretes = 'lembretes';
+  static const _kColTratamentos = 'tratamentos';
+  static const _kColEstoque = 'estoque';
+  static const _kScheduleVersion = 1;
+  static const _kBatchMaxOps = 500; // limite Firestore
+
+  // --------------------------- Utils de contexto ---------------------------
   bool _isSelf(BuildContext context) =>
       Provider.of<UsuarioProvider>(context, listen: false).isContextoSouEu;
-  // ===================== HELPERS P/ REFEIÇÕES =====================
-  String _weekdayKeyPTBR(DateTime dt) {
-    switch (dt.weekday) {
-      case DateTime.monday:
-        return 'Seg';
-      case DateTime.tuesday:
-        return 'Ter';
-      case DateTime.wednesday:
-        return 'Qua';
-      case DateTime.thursday:
-        return 'Qui';
-      case DateTime.friday:
-        return 'Sex';
-      case DateTime.saturday:
-        return 'Sáb';
-      case DateTime.sunday:
-        return 'Dom';
-      default:
-        return 'Padrão';
-    }
-  }
 
   Map<String, dynamic> _updatedBy(String role, String userId) => {
     'uid': userId,
-    'role': role, // 'patient' ou 'caregiver'
+    'role': role, // 'paciente' | 'cuidador'
   };
-  String? _horaRefeicaoParaDia(
-    UsuarioProvider provider,
-    DateTime dia,
-    String refeicao,
-  ) {
-    final cfg = provider.horarioRefeicaoParaDia(_weekdayKeyPTBR(dia));
-    switch (refeicao) {
-      case 'cafe':
-        return cfg['horaCafe'];
-      case 'almoco':
-        return cfg['horaAlmoco'];
-      case 'jantar':
-        return cfg['horaJanta'];
-      default:
-        return null;
-    }
-  }
+
+  // --------------------------- Utils de data/hora ---------------------------
+  static const List<String> _diasPT = [
+    'Dom',
+    'Seg',
+    'Ter',
+    'Qua',
+    'Qui',
+    'Sex',
+    'Sáb',
+  ];
+
+  String _weekdayKeyPTBR(DateTime dt) => _diasPT[dt.weekday % 7];
 
   DateTime? _composeDateTime(DateTime dia, String? hhmm) {
     if (hhmm == null || hhmm.trim().isEmpty) return null;
@@ -67,23 +58,95 @@ class LembreteService {
   bool _isSameCalendarDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
+  // --------------------------- Utils de refeições ---------------------------
+  String? _horaRefeicaoParaDia(
+      UsuarioProvider provider,
+      DateTime dia,
+      String refeicao, // cafe | almoco | jantar
+      ) {
+    final cfg = provider.horarioRefeicaoParaDia(_weekdayKeyPTBR(dia));
+    switch (refeicao) {
+      case 'cafe':
+        return (cfg['horaCafe'] ?? '').toString();
+      case 'almoco':
+        return (cfg['horaAlmoco'] ?? '').toString();
+      case 'jantar':
+        return (cfg['horaJanta'] ?? '').toString();
+      default:
+        return null;
+    }
+  }
+
+  // --------------------------- Utils de notificação ---------------------------
+  Future<void> _safeCancelNotif(NotificationService notif, int id) async {
+    try {
+      await notif.cancelNotification(id);
+    } catch (_) {}
+  }
+
+  Future<void> _safeScheduleNotif(
+      NotificationService notif, {
+        required int id,
+        required String title,
+        required String body,
+        required DateTime when,
+        required String idLembrete,
+        required String idUsuario,
+      }) async {
+    try {
+      await notif.scheduleNotification(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDateTime: when,
+        idLembrete: idLembrete,
+        idUsuario: idUsuario,
+      );
+    } catch (_) {}
+  }
+
   String _notifBodyFromTratamento(Map<String, dynamic> t) {
     final nome = (t['nomeMedicamento'] ?? '').toString();
     final conc = (t['concentracaoMedicamento'] ?? '').toString();
     final dose = (t['dosagem'] ?? '').toString();
     final tm = (t['tipoMedicamento'] ?? '').toString();
-    if (nome.isNotEmpty &&
-        conc.isNotEmpty &&
-        dose.isNotEmpty &&
-        tm.isNotEmpty) {
+    if (nome.isNotEmpty && conc.isNotEmpty && dose.isNotEmpty && tm.isNotEmpty) {
       return '$nome $conc ($dose $tm)';
     }
-    // fallback enxuto
     return 'Lembrete de medicamento';
   }
 
-  // ===================== API: REAGENDAR POR LEMBRETES =====================
-  /// Chame este método após salvar `horariosRefeicoes` do usuário.
+  // --------------------------- Utils Firestore ---------------------------
+  Future<void> _commitInChunks<T>(
+      List<T> items, {
+        required void Function(WriteBatch batch, T item) op,
+      }) async {
+    for (var i = 0; i < items.length; i += _kBatchMaxOps) {
+      final slice = items.sublist(i, (i + _kBatchMaxOps).clamp(0, items.length));
+      final batch = _firestore.batch();
+      for (final item in slice) {
+        op(batch, item);
+      }
+      await batch.commit();
+    }
+  }
+
+  Map<String, dynamic> _markMeta({
+    required bool isSelf,
+    required String userId,
+  }) {
+    return {
+      'scheduleVersion': _kScheduleVersion,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedBy': _updatedBy(isSelf ? 'paciente' : 'cuidador', userId),
+      'pendingSync': isSelf ? false : true,
+    };
+  }
+
+
+
+  // --------------------------- API: reagendar por refeições ---------------------------
+  /// Reagende lembretes do tipo "Junto com Refeições" após alterar os `horariosRefeicoes` do usuário.
   Future<void> reagendarLembretesPorRefeicaoViaLembretes({
     required BuildContext context,
     required String idUsuario,
@@ -93,21 +156,18 @@ class LembreteService {
     final limiteHoje = agora.add(const Duration(minutes: 10));
     final notif = NotificationService();
 
-    // Busca APENAS lembretes futuros do tipo "Junto com Refeições"
-    final snap =
-        await _firestore
-            .collection('usuarios')
-            .doc(idUsuario)
-            .collection('lembretes')
-            .where('cancelado', isEqualTo: false)
-            .where('adiado', isEqualTo: false)
-            .where('tipoFrequencia', isEqualTo: 'Junto com Refeições')
-            .get();
+    final snap = await _firestore
+        .collection(_kColUsuarios)
+        .doc(idUsuario)
+        .collection(_kColLembretes)
+        .where('cancelado', isEqualTo: false)
+        .where('adiado', isEqualTo: false)
+        .where('tipoFrequencia', isEqualTo: 'Junto com Refeições')
+        .get();
 
     final batch = _firestore.batch();
-    final toCancel = <int>[]; // idNotificacao a cancelar
-    final toResched =
-        <Map<String, dynamic>>[]; // {idNotif,idLembrete,novoDt,body}
+    final toCancel = <int>[];
+    final toResched = <Map<String, dynamic>>[];
 
     for (final doc in snap.docs) {
       final data = doc.data();
@@ -117,14 +177,13 @@ class LembreteService {
       final agendado = ts.toDate();
       if (agendado.isBefore(agora)) continue; // só futuros
 
-      final refeicao =
-          (data['refeicao'] ?? '').toString(); // cafe|almoco|jantar
+      final refeicao = (data['refeicao'] ?? '').toString();
       if (refeicao.isEmpty) continue;
 
       final hhmm = _horaRefeicaoParaDia(provider, agendado, refeicao);
       final novoDt = _composeDateTime(agendado, hhmm);
 
-      // se não há horário para essa refeição -> remove
+      // Se não há horário para essa refeição -> cancela/deleta
       if (novoDt == null) {
         final int? idNotif = data['idNotificacao'] as int?;
         if (idNotif != null) toCancel.add(idNotif);
@@ -132,7 +191,7 @@ class LembreteService {
         continue;
       }
 
-      // regra do hoje: >= agora + 10min
+      // Regra do "hoje": >= agora + 10min
       if (_isSameCalendarDay(agendado, agora) && novoDt.isBefore(limiteHoje)) {
         final int? idNotif = data['idNotificacao'] as int?;
         if (idNotif != null) toCancel.add(idNotif);
@@ -140,11 +199,10 @@ class LembreteService {
         continue;
       }
 
-      // se mudou o horário -> atualiza + reagenda
+      // Mudou o horário?
       if (agendado.millisecondsSinceEpoch != novoDt.millisecondsSinceEpoch) {
         final int? idNotif = data['idNotificacao'] as int?;
         if (idNotif != null) {
-          // monta body usando o tratamento
           final String idTrat = (data['idTratamento'] ?? '').toString();
           final t = provider.tratamentosMap[idTrat] ?? {};
           final body = _notifBodyFromTratamento(t);
@@ -165,40 +223,26 @@ class LembreteService {
 
     await batch.commit();
 
-    // notifs fora do batch
+    // Notificações fora do batch
     for (final id in toCancel) {
-      try {
-        await notif.cancelNotification(id);
-      } catch (_) {}
+      await _safeCancelNotif(notif, id);
     }
     for (final item in toResched) {
-      try {
-        await notif.scheduleNotification(
-          id: item['idNotif'] as int,
-          title: 'Hora do medicamento',
-          body: item['body'] as String,
-          scheduledDateTime: item['novoDt'] as DateTime,
-          idLembrete: item['idLembrete'] as String,
-          idUsuario: idUsuario,
-        );
-      } catch (_) {}
+      await _safeScheduleNotif(
+        notif,
+        id: item['idNotif'] as int,
+        title: 'Hora do medicamento',
+        body: item['body'] as String,
+        when: item['novoDt'] as DateTime,
+        idLembrete: item['idLembrete'] as String,
+        idUsuario: idUsuario,
+      );
     }
 
-    // recarrega cache local (opcional)
-    try {
-      final usuarioRef = _firestore.collection('usuarios').doc(idUsuario);
-      final snapshot = await usuarioRef.collection('lembretes').get();
-      provider.lembretes =
-          snapshot.docs.map((d) {
-            final m = d.data();
-            m['id'] = d.id;
-            return m;
-          }).toList();
-      provider.fetchData();
-    } catch (_) {}
+    await provider.fetchData();
   }
 
-  // ===================== MÉTODOS EXISTENTES (mantidos) =====================
+  // --------------------------- Ações Tomar/Pular/Adiar ---------------------------
   Future<void> marcarComoTomado({
     required BuildContext context,
     required String idUsuario,
@@ -210,51 +254,56 @@ class LembreteService {
 
     final provider = Provider.of<UsuarioProvider>(context, listen: false);
     final lembreteClicado = provider.lembretes.firstWhere(
-      (l) => l['id'] == idLembrete,
+          (l) => l['id'] == idLembrete,
       orElse: () => throw Exception('Lembrete não encontrado'),
     );
 
     final String idTratamento = lembreteClicado['idTratamento'];
     final String tipoFrequencia = lembreteClicado['tipoFrequencia'] ?? "";
-    final Timestamp tsClicado = lembreteClicado['dataHoraAgendado'];
-    final DateTime agendadoClicado = tsClicado.toDate();
+    final DateTime agendadoClicado =
+    (lembreteClicado['dataHoraAgendado'] as Timestamp).toDate();
 
-    final lembreteAntigo =
-        provider.lembretes.where((l) {
-            final data = (l['dataHoraAgendado'] as Timestamp).toDate();
-            return l['idTratamento'] == idTratamento &&
-                data.isBefore(agendadoClicado) &&
-                l['tomado'] != true &&
-                l['adiado'] != true &&
-                l['cancelado'] != true;
-          }).toList()
-          ..sort(
-            (a, b) => (a['dataHoraAgendado'] as Timestamp).compareTo(
-              b['dataHoraAgendado'] as Timestamp,
-            ),
-          );
+    // se for Intervalos Fixos e houver pendentes antigos, quita o mais antigo
+    final pendentesAntigos = provider.lembretes
+        .where((l) {
+      final data = (l['dataHoraAgendado'] as Timestamp).toDate();
+      return l['idTratamento'] == idTratamento &&
+          data.isBefore(agendadoClicado) &&
+          l['tomado'] != true &&
+          l['adiado'] != true &&
+          l['cancelado'] != true;
+    })
+        .toList()
+      ..sort((a, b) => (a['dataHoraAgendado'] as Timestamp)
+          .compareTo(b['dataHoraAgendado'] as Timestamp));
 
-    final lembrete =
-        (tipoFrequencia == 'Intervalos Fixos' && lembreteAntigo.isNotEmpty)
-            ? lembreteAntigo
-                .first // pega o mais antigo pendente
-            : lembreteClicado;
-    final Timestamp tsAgendado = lembrete['dataHoraAgendado'];
-    final DateTime agendado = tsAgendado.toDate();
+    final alvo = (tipoFrequencia == 'Intervalos Fixos' && pendentesAntigos.isNotEmpty)
+        ? pendentesAntigos.first
+        : lembreteClicado;
+
+    final DateTime agendado = (alvo['dataHoraAgendado'] as Timestamp).toDate();
     final DateTime tomado = agora.toDate();
     final Duration diferenca = tomado.difference(agendado);
 
-    if (lembrete['idNotificacao'] != null) {
-      await notificationService.cancelNotification(lembrete['idNotificacao']);
+    // cancela notificação pendente
+    final int? idNotif = alvo['idNotificacao'] as int?;
+    if (idNotif != null) {
+      await _safeCancelNotif(notificationService, idNotif);
     }
 
+    // marca tomado
     await _firestore
-        .collection('usuarios')
+        .collection(_kColUsuarios)
         .doc(idUsuario)
-        .collection('lembretes')
-        .doc(lembrete['id'])
-        .update({'tomado': true, 'dataHoraTomado': agora});
+        .collection(_kColLembretes)
+        .doc(alvo['id'])
+        .update({
+      'tomado': true,
+      'dataHoraTomado': agora,
+      ..._markMeta(isSelf: _isSelf(context), userId: provider.userId),
+    });
 
+    // para Intervalos Fixos, desloca futuros
     if (tipoFrequencia == 'Intervalos Fixos') {
       await atualizaFuturosLembretes(
         provider,
@@ -267,64 +316,287 @@ class LembreteService {
         notificationService,
       );
     }
+
+    // consome estoque
     await _consumirEstoqueEAvisar(
       context: context,
       idUsuario: idUsuario,
       idTratamento: idTratamento,
-      decremento: _parseDosagemSeguro(
-        provider.tratamentosMap,
-        idTratamento,
-      ),
+      decremento: _parseDosagemSeguro(provider.tratamentosMap, idTratamento),
     );
 
+    // se contínuo/ativo, auto-estende
     try {
-      final tratamento = provider.tratamentosMap[idTratamento] ?? {};
-      final tipo =
-          (tratamento['tipoTratamento'] ?? '').toString().toLowerCase();
-      final status = (tratamento['status'] ?? '').toString().toLowerCase();
-
-      if (tipo.contains('contínuo') || tipo.contains('continuo')) {
-        if (status == 'ativo' || status == 'ativa' || status == 'active') {
-          await _autoEstenderSeContinuo(
-            context: context,
-            idUsuario: idUsuario,
-            idTratamento: idTratamento,
-            referencia:
-                agendado,
-          );
-        }
-      }
+      final t = provider.tratamentosMap[idTratamento] ?? {};
+      final tipo = (t['tipoTratamento'] ?? '').toString().toLowerCase();
+      final status = (t['status'] ?? '').toString().toLowerCase();
+      if ((tipo.contains('contínuo') || tipo.contains('continuo')) &&
+          (status == 'ativo' || status == 'ativa' || status == 'active')) {
+    await _autoEstenderSeContinuo(
+    context: context,
+    idUsuario: idUsuario,
+    idTratamento: idTratamento,
+    referencia: agendado,
+    );
+    }
     } catch (_) {}
+
+    // finalize se não restaram vivos
+    await _finalizarSeUltimo(
+    context: context,
+    idUsuario: idUsuario,
+    idTratamento: idTratamento,
+    dataTerminoPreferida: agendado,
+    );
+  }
+
+  Future<void> pularLembrete({
+    required String idLembrete,
+    required BuildContext context,
+  }) async {
+    final provider = Provider.of<UsuarioProvider>(context, listen: false);
+    final idUsuario = provider.contextoUsuarioId;
+    final isSelf = provider.isContextoSouEu;
+
+    final lembrete = provider.lembretes.firstWhere(
+          (l) => l['id'] == idLembrete,
+      orElse: () => throw Exception('Lembrete não encontrado'),
+    );
+
+    final int? idNotif = lembrete['idNotificacao'] as int?;
+    if (idNotif != null) {
+      await _safeCancelNotif(NotificationService(), idNotif);
+    }
+
     await _firestore
-        .collection('usuarios')
+        .collection(_kColUsuarios)
         .doc(idUsuario)
-        .collection('lembretes')
-        .doc(lembrete['id'])
+        .collection(_kColLembretes)
+        .doc(idLembrete)
         .update({
-          'pendingSync': false,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'updatedBy': _updatedBy('paciente', idUsuario),
-        });
+      'cancelado': true,
+      ..._markMeta(isSelf: isSelf, userId: provider.userId),
+    });
 
     await _finalizarSeUltimo(
       context: context,
       idUsuario: idUsuario,
-      idTratamento: idTratamento,
-      // usa a data agendada como dataTermino preferida (ou hoje, no helper)
+      idTratamento: lembrete['idTratamento'],
       dataTerminoPreferida:
-          (lembrete['dataHoraAgendado'] as Timestamp?)?.toDate(),
+      (lembrete['dataHoraAgendado'] as Timestamp?)?.toDate(),
     );
   }
 
-  // Consome unidades do estoque do medicamento do tratamento e exibe avisos:
-  // - decrementa qtdAtual (default: 1)
-  // - avisa estoque baixo (qtdAtual < qtdMinima)
-  // - avisa validade (<=10 dias) e vencido
+  Future<void> adiarLembrete({
+    required BuildContext context,
+    required String idLembrete,
+    required DateTime novaDataHora,
+  }) async {
+    final provider = Provider.of<UsuarioProvider>(context, listen: false);
+    final idUsuario = provider.contextoUsuarioId;
+    final isSelf = provider.isContextoSouEu;
+
+    final lembrete = provider.lembretes.firstWhere(
+          (l) => l['id'] == idLembrete,
+      orElse: () => throw Exception('Lembrete não encontrado'),
+    );
+
+    final antigaDataHora = (lembrete['dataHoraAgendado'] as Timestamp).toDate();
+    final diferenca = novaDataHora.difference(antigaDataHora);
+    final String idTratamento = lembrete['idTratamento'];
+    final String tipoFrequencia = lembrete['tipoFrequencia'] ?? '';
+    final tratamento = provider.tratamentosMap[idTratamento];
+
+    final notif = NotificationService();
+
+    if (isSelf) {
+      // cancela antiga notificação
+      final int? oldId = lembrete['idNotificacao'] as int?;
+      if (oldId != null) await _safeCancelNotif(notif, oldId);
+
+      // cria novo lembrete
+      final novoDocRef = _firestore
+          .collection(_kColUsuarios)
+          .doc(idUsuario)
+          .collection(_kColLembretes)
+          .doc();
+      final novoIdLembrete = novoDocRef.id;
+      final int novoIdNotif = novoIdLembrete.hashCode.abs();
+
+      await novoDocRef.set({
+        'idTratamento': idTratamento,
+        'dataHoraAgendado': Timestamp.fromDate(novaDataHora),
+        'dataHoraTomado': null,
+        'tomado': false,
+        'adiado': false,
+        'notificado': false,
+        'idNovoLembrete': '',
+        'cancelado': false,
+        'refeicao': lembrete['refeicao'],
+        'momento': lembrete['momento'],
+        'idNotificacao': novoIdNotif,
+        'tipoTratamento': lembrete['tipoTratamento'],
+        'tipoFrequencia': lembrete['tipoFrequencia'],
+        'status': 'ativo',
+        ..._markMeta(isSelf: isSelf, userId: provider.userId),
+      });
+
+      // marca o antigo como adiado -> aponta para novo
+      await _firestore
+          .collection(_kColUsuarios)
+          .doc(idUsuario)
+          .collection(_kColLembretes)
+          .doc(idLembrete)
+          .update({
+        'adiado': true,
+        'idNovoLembrete': novoIdLembrete,
+        ..._markMeta(isSelf: isSelf, userId: provider.userId),
+      });
+
+      // agenda notificação do novo
+      final body =
+          "${tratamento['nomeMedicamento']} ${tratamento['concentracaoMedicamento']} "
+          "(${tratamento['dosagem']} ${tratamento['tipoMedicamento']})";
+      await _safeScheduleNotif(
+        notif,
+        id: novoIdNotif,
+        title: 'Hora do medicamento',
+        body: body,
+        when: novaDataHora,
+        idLembrete: novoIdLembrete,
+        idUsuario: idUsuario,
+      );
+
+      // desloca futuros se for Intervalos Fixos
+      if (tipoFrequencia == 'Intervalos Fixos') {
+        await atualizaFuturosLembretes(
+          provider,
+          idTratamento,
+          antigaDataHora,
+          novoIdLembrete,
+          diferenca,
+          null,
+          idUsuario,
+          notif,
+        );
+      }
+    }
+  }
+
+  Future<void> atualizaFuturosLembretes(
+      UsuarioProvider provider,
+      String idTratamento,
+      DateTime antigaDataHora,
+      String novoIdLembrete,
+      Duration diferenca,
+      Timestamp? maiorDataAtualizada,
+      String idUsuario,
+      NotificationService notificationService,
+      ) async {
+    final isSelf = provider.isContextoSouEu;
+
+    // Filtra em memória (mantendo sua lógica atual).
+    final futuros = provider.lembretes.where((l) {
+      final data = l['dataHoraAgendado'] as Timestamp;
+      // Se quiser incluir exatamente em 'antigaDataHora', troque por: !data.toDate().isBefore(antigaDataHora)
+      return l['idTratamento'] == idTratamento &&
+          data.toDate().isAfter(antigaDataHora) &&
+          l['tomado'] != true &&
+          l['adiado'] != true &&
+          l['cancelado'] != true &&
+          l['id'] != novoIdLembrete;
+    }).toList();
+
+    if (futuros.isEmpty) {
+      return;
+    }
+
+    final usuariosRef = _firestore.collection(_kColUsuarios).doc(idUsuario);
+    final lembretesRef = usuariosRef.collection(_kColLembretes);
+
+    // Vamos fazer updates em batch e reagendar notificações após o commit
+    final batch = _firestore.batch();
+    final notifsParaReagendar = <({
+    int idNotificacao,
+    String idLembrete,
+    DateTime novaData
+    })>[];
+
+    for (final l in futuros) {
+      final String id = l['id'];
+      final DateTime dataAntiga = (l['dataHoraAgendado'] as Timestamp).toDate();
+      final DateTime novaData = dataAntiga.add(diferenca);
+      final int? idNotificacao = l['idNotificacao'];
+
+      // Mantém a maior data para atualizar o dataTermino do tratamento
+      if (maiorDataAtualizada == null || novaData.isAfter(maiorDataAtualizada.toDate())) {
+        maiorDataAtualizada = Timestamp.fromDate(novaData);
+      }
+
+      // >>> AQUI ATUALIZA A DATA NO FIRESTORE <<<
+      final docRef = lembretesRef.doc(id);
+      batch.update(docRef, {
+        'dataHoraAgendado': Timestamp.fromDate(novaData),
+        ..._markMeta(isSelf: isSelf, userId: provider.userId),
+      });
+
+      // Prepara reagendamento de notificação (somente se for o próprio usuário)
+      if (idNotificacao != null && isSelf) {
+        notifsParaReagendar.add((
+        idNotificacao: idNotificacao,
+        idLembrete: id,
+        novaData: novaData,
+        ));
+      }
+    }
+
+    // Aplica todas as atualizações nos lembretes
+    await batch.commit();
+
+    // Reagenda notificações depois do commit
+    if (isSelf && notifsParaReagendar.isNotEmpty) {
+      final tratamento = provider.tratamentosMap[idTratamento] ?? {};
+      final body =
+      "${tratamento['nomeMedicamento'] ?? ''} ${tratamento['concentracaoMedicamento'] ?? ''} "
+          "(${tratamento['dosagem'] ?? ''} ${tratamento['tipoMedicamento'] ?? ''})".trim();
+
+      for (final n in notifsParaReagendar) {
+        await _safeCancelNotif(notificationService, n.idNotificacao);
+        await _safeScheduleNotif(
+          notificationService,
+          id: n.idNotificacao,
+          title: 'Hora do medicamento',
+          body: body,
+          when: n.novaData,
+          idLembrete: n.idLembrete,
+          idUsuario: idUsuario,
+        );
+      }
+    }
+
+    // Atualiza dataTermino do tratamento, se necessário
+    if (maiorDataAtualizada != null) {
+      await usuariosRef
+          .collection(_kColTratamentos)
+          .doc(idTratamento)
+          .update({'dataTermino': maiorDataAtualizada});
+    }
+
+
+     for (final l in futuros) {
+      l['dataHoraAgendado'] = Timestamp.fromDate(
+         (l['dataHoraAgendado'] as Timestamp).toDate().add(diferenca),
+       );
+     }
+  }
+
+
+  // --------------------------- Estoque ---------------------------
   Future<void> _consumirEstoqueEAvisar({
     required BuildContext context,
     required String idUsuario,
     required String idTratamento,
-    int decremento = 1, // caso queira consumir >1 unidade por dose
+    int decremento = 1,
   }) async {
     if (decremento <= 0) return;
 
@@ -333,7 +605,6 @@ class LembreteService {
     final String idMedicamento = (tratamento['idMedicamento'] ?? '').toString();
     if (idMedicamento.isEmpty) return;
 
-    // helper local p/ converter validade
     DateTime? _asDate(dynamic v) {
       if (v == null) return null;
       if (v is DateTime) return DateTime(v.year, v.month, v.day);
@@ -343,7 +614,6 @@ class LembreteService {
       }
       if (v is String && v.trim().isNotEmpty) {
         try {
-          // precisa de intl: DateFormat('dd/MM/yyyy')
           return DateFormat('dd/MM/yyyy').parseStrict(v.trim());
         } catch (_) {
           return null;
@@ -363,22 +633,18 @@ class LembreteService {
     final int qtdMinima = (e['qtdMinima'] as int?) ?? 0;
     final DateTime? validade = _asDate(e['dataValidade']);
 
-    // decrementa (sem deixar negativo)
     final int novoEstoqueAtual = (estoqueAtual - decremento).clamp(0, 1 << 31);
 
-    // persiste no Firestore
     await _firestore
-        .collection('usuarios')
+        .collection(_kColUsuarios)
         .doc(idUsuario)
-        .collection('estoque')
+        .collection(_kColEstoque)
         .doc(idMedicamento)
         .update({'qtdAtual': novoEstoqueAtual});
 
-    // espelha no cache
     e['qtdAtual'] = novoEstoqueAtual;
     estoqueMap[idMedicamento] = e;
 
-    // 1) aviso de estoque baixo
     if (novoEstoqueAtual < qtdMinima) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -393,7 +659,6 @@ class LembreteService {
       );
     }
 
-    // 2) aviso de validade (10 dias antes / vencido)
     if (validade != null) {
       final DateTime hoje = DateTime.now();
       final DateTime dHoje = DateTime(hoje.year, hoje.month, hoje.day);
@@ -429,296 +694,53 @@ class LembreteService {
     }
   }
 
-  int _parseDosagemSeguro(
-    Map<String, dynamic> tratamentosMap,
-    String idTratamento,
-  ) {
+  int _parseDosagemSeguro(Map<String, dynamic> tratamentosMap, String idTratamento) {
     try {
       final raw = tratamentosMap[idTratamento]?['dosagem'];
       if (raw == null) return 1;
-
       if (raw is int) return raw > 0 ? raw : 1;
-
       if (raw is String && raw.trim().isNotEmpty) {
         final parsed = int.tryParse(raw.trim());
         return (parsed != null && parsed > 0) ? parsed : 1;
       }
-
       return 1;
     } catch (_) {
       return 1;
     }
   }
 
-  Future<void> pularLembrete({
-    required String idLembrete,
-    required BuildContext context,
-  }) async {
-    final provider = Provider.of<UsuarioProvider>(context, listen: false);
-    final idUsuario = provider.contextoUsuarioId;
-    final isContextoSouEu = provider.isContextoSouEu;
-    final lembrete = provider.lembretes.firstWhere(
-      (l) => l['id'] == idLembrete,
-      orElse: () => throw Exception('Lembrete não encontrado'),
-    );
-
-    if (lembrete['idNotificacao'] != null) {
-      final notificationService = NotificationService();
-      await notificationService.cancelNotification(lembrete['idNotificacao']);
-    }
-
-    await _firestore
-        .collection('usuarios')
-        .doc(idUsuario)
-        .collection('lembretes')
-        .doc(idLembrete)
-        .update({
-          'cancelado': true,
-          'scheduleVersion': 1,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'updatedBy': _updatedBy(
-            isContextoSouEu ? 'paciente' : 'cuidador',
-            provider.userId,
-          ),
-          'pendingSync': isContextoSouEu ? false : true,
-        });
-
-    final String idTratamento = lembrete['idTratamento'];
-    await _finalizarSeUltimo(
-      context: context,
-      idUsuario: idUsuario,
-      idTratamento: idTratamento,
-      // usa a data agendada como dataTermino preferida (ou hoje, no helper)
-      dataTerminoPreferida:
-          (lembrete['dataHoraAgendado'] as Timestamp?)?.toDate(),
-    );
-  }
-
-  Future<void> adiarLembrete({
-    required BuildContext context,
-    required String idLembrete,
-    required DateTime novaDataHora,
-  }) async {
-    final provider = Provider.of<UsuarioProvider>(context, listen: false);
-    final idUsuario = provider.contextoUsuarioId;
-    final isContextoSouEu = provider.isContextoSouEu;
-    Timestamp? maiorDataAtualizada;
-
-    final lembrete = provider.lembretes.firstWhere(
-      (l) => l['id'] == idLembrete,
-      orElse: () => throw Exception('Lembrete não encontrado'),
-    );
-
-    final antigaDataHora = (lembrete['dataHoraAgendado'] as Timestamp).toDate();
-    final diferenca = novaDataHora.difference(antigaDataHora);
-    final String idTratamento = lembrete['idTratamento'];
-    final String tipoFrequencia = lembrete['tipoFrequencia'] ?? "";
-    final tratamento = provider.tratamentosMap[idTratamento];
-
-    final notificationService = NotificationService();
-    if (isContextoSouEu) {
-      if (lembrete['idNotificacao'] != null && isContextoSouEu) {
-        await notificationService.cancelNotification(lembrete['idNotificacao']);
-      }
-
-      final novoDocRef =
-          _firestore
-              .collection('usuarios')
-              .doc(idUsuario)
-              .collection('lembretes')
-              .doc();
-
-      final novoIdLembrete = novoDocRef.id;
-      final int novoIdNotificacao = novoIdLembrete.hashCode.abs();
-
-      final novoLembrete = {
-        'idTratamento': idTratamento,
-        'dataHoraAgendado': Timestamp.fromDate(novaDataHora),
-        'dataHoraTomado': null,
-        'tomado': false,
-        'adiado': false,
-        'notificado': false,
-        'idNovoLembrete': '',
-        'cancelado': false,
-        'refeicao': lembrete['refeicao'],
-        'momento': lembrete['momento'],
-        'idNotificacao': novoIdNotificacao,
-        'tipoTratamento': lembrete['tipoTratamento'],
-        'tipoFrequencia': lembrete['tipoFrequencia'],
-        'scheduleVersion': 1,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'updatedBy': _updatedBy(
-          isContextoSouEu ? 'paciente' : 'cuidador',
-          provider.userId,
-        ),
-        'pendingSync': isContextoSouEu ? false : true,
-      };
-
-      await novoDocRef.set(novoLembrete);
-
-      await _firestore
-          .collection('usuarios')
-          .doc(idUsuario)
-          .collection('lembretes')
-          .doc(idLembrete)
-          .update({
-            'adiado': true,
-            'idNovoLembrete': novoIdLembrete,
-            'scheduleVersion': 1,
-            'updatedAt': FieldValue.serverTimestamp(),
-            'updatedBy': _updatedBy(
-              isContextoSouEu ? 'paciente' : 'cuidador',
-              provider.userId,
-            ),
-            'pendingSync': isContextoSouEu ? false : true,
-          });
-      if (isContextoSouEu) {
-        await notificationService.scheduleNotification(
-          id: novoIdNotificacao,
-          title: 'Hora do medicamento',
-          body:
-              "${tratamento['nomeMedicamento']} ${tratamento['concentracaoMedicamento']} "
-              "(${tratamento['dosagem']} ${tratamento['tipoMedicamento']})",
-          scheduledDateTime: novaDataHora,
-          idLembrete: novoIdLembrete,
-          idUsuario: idUsuario,
-        );
-      }
-
-      if (tipoFrequencia == 'Intervalos Fixos') {
-        await atualizaFuturosLembretes(
-          provider,
-          idTratamento,
-          antigaDataHora,
-          novoIdLembrete,
-          diferenca,
-          maiorDataAtualizada,
-          idUsuario,
-          notificationService,
-        );
-      }
-    }
-  }
-
-  Future<void> atualizaFuturosLembretes(
-    UsuarioProvider provider,
-    String idTratamento,
-    DateTime antigaDataHora,
-    String novoIdLembrete,
-    Duration diferenca,
-    Timestamp? maiorDataAtualizada,
-    String idUsuario,
-    NotificationService notificationService,
-  ) async {
-    // Filtra do cache os lembretes futuros (mesma lógica que você usa)
-    final futuros = provider.lembretes.where((l) {
-      final data = l['dataHoraAgendado'] as Timestamp;
-      return l['idTratamento'] == idTratamento &&
-          data.toDate().isAfter(antigaDataHora) &&
-          l['tomado'] != true &&
-          l['adiado'] != true &&
-          l['cancelado'] != true &&
-          l['id'] != novoIdLembrete;
-    });
-
-    // Vamos reagendar localmente e marcar cada doc como sincronizado
-    for (final l in futuros) {
-      final String id = l['id'];
-      final DateTime dataAntiga = (l['dataHoraAgendado'] as Timestamp).toDate();
-      final DateTime novaData = dataAntiga.add(diferenca);
-      final int? idNotificacao = l['idNotificacao'];
-
-      if (maiorDataAtualizada == null ||
-          novaData.isAfter(maiorDataAtualizada.toDate())) {
-        maiorDataAtualizada = Timestamp.fromDate(novaData);
-      }
-
-      // Atualiza o Firestore com metadata do "paciente alterou"
-      await _firestore
-          .collection('usuarios')
-          .doc(idUsuario)
-          .collection('lembretes')
-          .doc(id)
-          .update({
-            'scheduleVersion': 1,
-            'updatedAt': FieldValue.serverTimestamp(),
-            'updatedBy': _updatedBy(
-              provider.isContextoSouEu ? 'paciente' : 'cuidador',
-              provider.userId,
-            ),
-            'pendingSync': provider.isContextoSouEu ? false : true,
-          });
-
-      // Reagendamento local (idempotente)
-      if (idNotificacao != null && provider.isContextoSouEu) {
-        try {
-          await notificationService.cancelNotification(idNotificacao);
-        } catch (_) {}
-        final tratamento = provider.tratamentosMap[idTratamento];
-        final body =
-            "${tratamento['nomeMedicamento']} ${tratamento['concentracaoMedicamento']} "
-            "(${tratamento['dosagem']} ${tratamento['tipoMedicamento']})";
-        try {
-          await notificationService.scheduleNotification(
-            id: idNotificacao,
-            title: 'Hora do medicamento',
-            body: body,
-            scheduledDateTime: novaData,
-            idLembrete: id,
-            idUsuario: idUsuario,
-          );
-        } catch (_) {}
-      }
-    }
-
-    // (opcional, como você já fazia) se o último lembrete foi empurrado, mova o término
-    if (maiorDataAtualizada != null) {
-      await _firestore
-          .collection('usuarios')
-          .doc(idUsuario)
-          .collection('tratamentos')
-          .doc(idTratamento)
-          .update({'dataTermino': maiorDataAtualizada});
-    }
-  }
-
-  // === dentro da classe LembreteService ===
-  // Cria mais 10 dias de lembretes se horizonte < 5 dias (âncora = `referencia`)
+  // --------------------------- Extensão automática (contínuo) ---------------------------
   Future<void> _autoEstenderSeContinuo({
     required BuildContext context,
     required String idUsuario,
     required String idTratamento,
-    required DateTime referencia, // data agendada do lembrete processado
+    required DateTime referencia,
   }) async {
     final provider = Provider.of<UsuarioProvider>(context, listen: false);
     final t = provider.tratamentosMap[idTratamento] ?? {};
     final tipo = (t['tipoTratamento'] ?? '').toString().toLowerCase();
     final status = (t['status'] ?? '').toString().toLowerCase();
 
-    // Só para tratamento contínuo e ativo
     if (!(tipo.contains('contínuo') || tipo.contains('continuo'))) return;
     if (!(status == 'ativo' || status == 'ativa' || status == 'active')) return;
 
-    // Último lembrete vivo do tratamento
-    final ult =
-        await _firestore
-            .collection('usuarios')
-            .doc(idUsuario)
-            .collection('lembretes')
-            .where('idTratamento', isEqualTo: idTratamento)
-            .where('cancelado', isEqualTo: false)
-            .orderBy('dataHoraAgendado', descending: true)
-            .limit(1)
-            .get();
+    final ult = await _firestore
+        .collection(_kColUsuarios)
+        .doc(idUsuario)
+        .collection(_kColLembretes)
+        .where('idTratamento', isEqualTo: idTratamento)
+        .where('cancelado', isEqualTo: false)
+        .orderBy('dataHoraAgendado', descending: true)
+        .limit(1)
+        .get();
     if (ult.docs.isEmpty) return;
 
     final ultimoDt =
-        (ult.docs.first.data()['dataHoraAgendado'] as Timestamp).toDate();
+    (ult.docs.first.data()['dataHoraAgendado'] as Timestamp).toDate();
 
-    // Critério: último < referencia + 5 dias
+    // critério: se horizonte < 5 dias, cria +10 dias
     if (!ultimoDt.isBefore(referencia.add(const Duration(days: 5)))) return;
 
-    // Despacha por tipo de frequência
     final tipoFreq = (t['tipoFrequencia'] ?? '').toString();
     if (tipoFreq == 'Intervalos Fixos') {
       await _estenderPorIntervalo(
@@ -748,44 +770,33 @@ class LembreteService {
         referencia: referencia,
       );
     }
+
     await _firestore
-        .collection('usuarios')
+        .collection(_kColUsuarios)
         .doc(idUsuario)
-        .collection('tratamentos')
+        .collection(_kColTratamentos)
         .doc(idTratamento)
-        .update({
-          'scheduleVersion': 1,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'updatedBy': _updatedBy(
-            provider.isContextoSouEu ? 'paciente' : 'cuidador',
-            provider.userId,
-          ),
-          'pendingSync': provider.isContextoSouEu ? false : true,
-        });
+        .update(_markMeta(isSelf: _isSelf(context), userId: provider.userId));
   }
 
-  /// --------- 1) Intervalos Fixos ----------
   Future<void> _estenderPorIntervalo({
     required BuildContext context,
     required String idUsuario,
     required String idTratamento,
     required DateTime ultimoDt,
     required Map<String, dynamic> tratamento,
-    required DateTime
-    referencia, // disponível se quiser regras relativas ao dia de referência
+    required DateTime referencia,
   }) async {
     final notif = NotificationService();
     final provider = Provider.of<UsuarioProvider>(context, listen: false);
 
-    // Tenta obter o intervalo em horas
     int? intervaloHoras;
-    final fH = tratamento['lembretes'][0]['valor'];
+    final fH = tratamento['lembretes']?[0]?['valor'];
     if (fH is int) intervaloHoras = fH;
     if (intervaloHoras == null && fH is String) {
       intervaloHoras = int.tryParse(fH);
     }
     if (intervaloHoras == null || intervaloHoras <= 0) {
-      // fallback: tenta extrair de 'frequencia' (ex.: "a cada 8h", "8h")
       final freqStr = (tratamento['frequencia'] ?? '').toString().toLowerCase();
       final match = RegExp(r'(\d{1,2})\s*h').firstMatch(freqStr);
       if (match != null) intervaloHoras = int.tryParse(match.group(1)!);
@@ -793,32 +804,27 @@ class LembreteService {
     if (intervaloHoras == null || intervaloHoras <= 0) return;
 
     final body = _notifBodyFromTratamento(tratamento);
-    final limite = ultimoDt.add(
-      const Duration(days: 10),
-    ); // estender por +10 dias
+    final limite = ultimoDt.add(const Duration(days: 10));
     DateTime cursor = ultimoDt;
 
     while (cursor.isBefore(limite)) {
       cursor = cursor.add(Duration(hours: intervaloHoras));
 
-      // Evita duplicatas: mesmo tratamento + mesmo timestamp
-      final exists =
-          await _firestore
-              .collection('usuarios')
-              .doc(idUsuario)
-              .collection('lembretes')
-              .where('idTratamento', isEqualTo: idTratamento)
-              .where('dataHoraAgendado', isEqualTo: Timestamp.fromDate(cursor))
-              .limit(1)
-              .get();
+      final exists = await _firestore
+          .collection(_kColUsuarios)
+          .doc(idUsuario)
+          .collection(_kColLembretes)
+          .where('idTratamento', isEqualTo: idTratamento)
+          .where('dataHoraAgendado', isEqualTo: Timestamp.fromDate(cursor))
+          .limit(1)
+          .get();
       if (exists.docs.isNotEmpty) continue;
 
-      final doc =
-          _firestore
-              .collection('usuarios')
-              .doc(idUsuario)
-              .collection('lembretes')
-              .doc();
+      final doc = _firestore
+          .collection(_kColUsuarios)
+          .doc(idUsuario)
+          .collection(_kColLembretes)
+          .doc();
       final idNotif = doc.id.hashCode.abs();
 
       await doc.set({
@@ -835,95 +841,64 @@ class LembreteService {
         'idNotificacao': idNotif,
         'tipoTratamento': tratamento['tipoTratamento'],
         'tipoFrequencia': 'Intervalos Fixos',
-        'scheduleVersion': 1,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'updatedBy': _updatedBy(
-          provider.isContextoSouEu ? 'paciente' : 'cuidador',
-          provider.userId,
-        ),
-        'pendingSync': provider.isContextoSouEu ? false : true,
         'status': 'ativo',
+        ..._markMeta(isSelf: _isSelf(context), userId: provider.userId),
       });
 
-      try {
-        await notif.scheduleNotification(
-          id: idNotif,
-          title: 'Hora do medicamento',
-          body: body,
-          scheduledDateTime: cursor,
-          idLembrete: doc.id,
-          idUsuario: idUsuario,
-        );
-      } catch (_) {}
+      await _safeScheduleNotif(
+        notif,
+        id: idNotif,
+        title: 'Hora do medicamento',
+        body: body,
+        when: cursor,
+        idLembrete: doc.id,
+        idUsuario: idUsuario,
+      );
     }
 
-    // refresh cache local
-    try {
-      final snapshot =
-          await _firestore
-              .collection('usuarios')
-              .doc(idUsuario)
-              .collection('lembretes')
-              .get();
-      provider.lembretes =
-          snapshot.docs.map((d) {
-            final m = d.data();
-            m['id'] = d.id;
-            return m;
-          }).toList();
-      provider.fetchData();
-    } catch (_) {}
+    provider.fetchData();
   }
 
-  /// --------- 2) Horários Fixos ----------
   Future<void> _estenderPorHorariosFixos({
     required BuildContext context,
     required String idUsuario,
     required String idTratamento,
     required DateTime ultimoDt,
     required Map<String, dynamic> tratamento,
-    required DateTime
-    referencia, // disponível se quiser alguma validação temporal
+    required DateTime referencia,
   }) async {
     final notif = NotificationService();
     final provider = Provider.of<UsuarioProvider>(context, listen: false);
     final body = _notifBodyFromTratamento(tratamento);
 
-    // Descobre o "padrão de horários" do último dia existente
     final diaBase = DateTime(ultimoDt.year, ultimoDt.month, ultimoDt.day);
-    final slotsSnap =
-        await _firestore
-            .collection('usuarios')
-            .doc(idUsuario)
-            .collection('lembretes')
-            .where('idTratamento', isEqualTo: idTratamento)
-            .where('cancelado', isEqualTo: false)
-            .where(
-              'dataHoraAgendado',
-              isGreaterThanOrEqualTo: Timestamp.fromDate(diaBase),
-            )
-            .where(
-              'dataHoraAgendado',
-              isLessThan: Timestamp.fromDate(
-                diaBase.add(const Duration(days: 1)),
-              ),
-            )
-            .get();
+    final slotsSnap = await _firestore
+        .collection(_kColUsuarios)
+        .doc(idUsuario)
+        .collection(_kColLembretes)
+        .where('idTratamento', isEqualTo: idTratamento)
+        .where('cancelado', isEqualTo: false)
+        .where('dataHoraAgendado', isGreaterThanOrEqualTo: Timestamp.fromDate(diaBase))
+        .where(
+      'dataHoraAgendado',
+      isLessThan: Timestamp.fromDate(diaBase.add(const Duration(days: 1))),
+    )
+        .get();
     if (slotsSnap.docs.isEmpty) return;
 
-    // Horas/min e momento (se você usar esse campo)
-    final slots =
-        slotsSnap.docs.map((d) {
-          final m = d.data();
-          final dt = (m['dataHoraAgendado'] as Timestamp).toDate();
-          return {'h': dt.hour, 'm': dt.minute, 'momento': m['momento']};
-        }).toList();
+    final slots = [
+      for (final d in slotsSnap.docs)
+        {
+          'h': ((d.data()['dataHoraAgendado'] as Timestamp).toDate()).hour,
+          'm': ((d.data()['dataHoraAgendado'] as Timestamp).toDate()).minute,
+          'momento': d.data()['momento'],
+        }
+    ];
 
-    // Replicar por +10 dias a partir do dia seguinte ao último dia
     DateTime cursorDia = diaBase.add(const Duration(days: 1));
-    final fimProximoBloco = diaBase.add(const Duration(days: 10));
+    final fim = diaBase.add(const Duration(days: 10));
 
-    while (cursorDia.isBefore(fimProximoBloco)) {
+    while (cursorDia.isBefore(fim)) {
       for (final s in slots) {
         final ts = DateTime(
           cursorDia.year,
@@ -933,24 +908,21 @@ class LembreteService {
           (s['m'] as int?) ?? 0,
         );
 
-        // Evita duplicar
-        final exists =
-            await _firestore
-                .collection('usuarios')
-                .doc(idUsuario)
-                .collection('lembretes')
-                .where('idTratamento', isEqualTo: idTratamento)
-                .where('dataHoraAgendado', isEqualTo: Timestamp.fromDate(ts))
-                .limit(1)
-                .get();
+        final exists = await _firestore
+            .collection(_kColUsuarios)
+            .doc(idUsuario)
+            .collection(_kColLembretes)
+            .where('idTratamento', isEqualTo: idTratamento)
+            .where('dataHoraAgendado', isEqualTo: Timestamp.fromDate(ts))
+            .limit(1)
+            .get();
         if (exists.docs.isNotEmpty) continue;
 
-        final doc =
-            _firestore
-                .collection('usuarios')
-                .doc(idUsuario)
-                .collection('lembretes')
-                .doc();
+        final doc = _firestore
+            .collection(_kColUsuarios)
+            .doc(idUsuario)
+            .collection(_kColLembretes)
+            .doc();
         final idNotif = doc.id.hashCode.abs();
 
         await doc.set({
@@ -967,131 +939,92 @@ class LembreteService {
           'idNotificacao': idNotif,
           'tipoTratamento': tratamento['tipoTratamento'],
           'tipoFrequencia': 'Horários Fixos',
-          'scheduleVersion': 1,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'updatedBy': _updatedBy(
-            provider.isContextoSouEu ? 'paciente' : 'cuidador',
-            provider.userId,
-          ),
-          'pendingSync': provider.isContextoSouEu ? false : true,
           'status': 'ativo',
+          ..._markMeta(isSelf: _isSelf(context), userId: provider.userId),
         });
 
-        try {
-          if (provider.isContextoSouEu) {
-            await notif.scheduleNotification(
-              id: idNotif,
-              title: 'Hora do medicamento',
-              body: body,
-              scheduledDateTime: ts,
-              idLembrete: doc.id,
-              idUsuario: idUsuario,
-            );
-          }
-        } catch (_) {}
+        if (_isSelf(context)) {
+          await _safeScheduleNotif(
+            notif,
+            id: idNotif,
+            title: 'Hora do medicamento',
+            body: body,
+            when: ts,
+            idLembrete: doc.id,
+            idUsuario: idUsuario,
+          );
+        }
       }
       cursorDia = cursorDia.add(const Duration(days: 1));
     }
 
-    // refresh cache local
-    try {
-      final snapshot =
-          await _firestore
-              .collection('usuarios')
-              .doc(idUsuario)
-              .collection('lembretes')
-              .get();
-      provider.lembretes =
-          snapshot.docs.map((d) {
-            final m = d.data();
-            m['id'] = d.id;
-            return m;
-          }).toList();
-      provider.fetchData();
-    } catch (_) {}
+    provider.fetchData();
   }
 
-  /// --------- 3) Junto com Refeições ----------
   Future<void> _estenderPorRefeicoes({
     required BuildContext context,
     required String idUsuario,
     required String idTratamento,
     required DateTime ultimoDt,
     required Map<String, dynamic> tratamento,
-    required DateTime
-    referencia, // usar na regra de "dia de referência + 10min"
+    required DateTime referencia,
   }) async {
     final notif = NotificationService();
     final provider = Provider.of<UsuarioProvider>(context, listen: false);
     final body = _notifBodyFromTratamento(tratamento);
 
-    // Quais refeições foram usadas no último dia (cafe/almoco/jantar)
     final diaBase = DateTime(ultimoDt.year, ultimoDt.month, ultimoDt.day);
-    final padraoSnap =
-        await _firestore
-            .collection('usuarios')
-            .doc(idUsuario)
-            .collection('lembretes')
-            .where('idTratamento', isEqualTo: idTratamento)
-            .where('cancelado', isEqualTo: false)
-            .where(
-              'dataHoraAgendado',
-              isGreaterThanOrEqualTo: Timestamp.fromDate(diaBase),
-            )
-            .where(
-              'dataHoraAgendado',
-              isLessThan: Timestamp.fromDate(
-                diaBase.add(const Duration(days: 1)),
-              ),
-            )
-            .get();
+    final padraoSnap = await _firestore
+        .collection(_kColUsuarios)
+        .doc(idUsuario)
+        .collection(_kColLembretes)
+        .where('idTratamento', isEqualTo: idTratamento)
+        .where('cancelado', isEqualTo: false)
+        .where('dataHoraAgendado', isGreaterThanOrEqualTo: Timestamp.fromDate(diaBase))
+        .where(
+      'dataHoraAgendado',
+      isLessThan: Timestamp.fromDate(diaBase.add(const Duration(days: 1))),
+    )
+        .get();
     if (padraoSnap.docs.isEmpty) return;
 
-    final refeicoesUsadas = <String>{};
-    for (final d in padraoSnap.docs) {
-      final r = (d.data()['refeicao'] ?? '').toString();
-      if (r.isNotEmpty) refeicoesUsadas.add(r); // 'cafe' | 'almoco' | 'jantar'
-    }
+    final refeicoesUsadas = <String>{
+      for (final d in padraoSnap.docs)
+        if ((d.data()['refeicao'] ?? '').toString().isNotEmpty)
+          (d.data()['refeicao'] as String)
+    };
     if (refeicoesUsadas.isEmpty) return;
 
-    // Gerar próximos 10 dias
     DateTime cursorDia = diaBase.add(const Duration(days: 1));
     final fim = diaBase.add(const Duration(days: 10));
 
     while (cursorDia.isBefore(fim)) {
       for (final r in refeicoesUsadas) {
-        final hhmm = _horaRefeicaoParaDia(
-          provider,
-          cursorDia,
-          r,
-        ); // busca no provider horário do dia/semana
+        final hhmm = _horaRefeicaoParaDia(provider, cursorDia, r);
         final ts = _composeDateTime(cursorDia, hhmm);
         if (ts == null) continue;
 
-        // Regra do "dia de referência": se for o mesmo dia da referência, só cria se ts >= referencia + 10min
+        // regra do dia de referência: >= referencia + 10min
         if (_isSameCalendarDay(ts, referencia) &&
             ts.isBefore(referencia.add(const Duration(minutes: 10)))) {
           continue;
         }
 
-        // Evita duplicar
-        final exists =
-            await _firestore
-                .collection('usuarios')
-                .doc(idUsuario)
-                .collection('lembretes')
-                .where('idTratamento', isEqualTo: idTratamento)
-                .where('dataHoraAgendado', isEqualTo: Timestamp.fromDate(ts))
-                .limit(1)
-                .get();
+        final exists = await _firestore
+            .collection(_kColUsuarios)
+            .doc(idUsuario)
+            .collection(_kColLembretes)
+            .where('idTratamento', isEqualTo: idTratamento)
+            .where('dataHoraAgendado', isEqualTo: Timestamp.fromDate(ts))
+            .limit(1)
+            .get();
         if (exists.docs.isNotEmpty) continue;
 
-        final doc =
-            _firestore
-                .collection('usuarios')
-                .doc(idUsuario)
-                .collection('lembretes')
-                .doc();
+        final doc = _firestore
+            .collection(_kColUsuarios)
+            .doc(idUsuario)
+            .collection(_kColLembretes)
+            .doc();
         final idNotif = doc.id.hashCode.abs();
 
         await doc.set({
@@ -1103,171 +1036,128 @@ class LembreteService {
           'notificado': false,
           'idNovoLembrete': '',
           'cancelado': false,
-          'refeicao': r, // 'cafe' | 'almoco' | 'jantar'
+          'refeicao': r,
           'momento': null,
           'idNotificacao': idNotif,
           'tipoTratamento': tratamento['tipoTratamento'],
           'tipoFrequencia': 'Junto com Refeições',
-          'scheduleVersion': 1,
-          'updatedAt': FieldValue.serverTimestamp(),
-          'updatedBy': _updatedBy(
-            provider.isContextoSouEu ? 'paciente' : 'cuidador',
-            provider.userId,
-          ),
-          'pendingSync': provider.isContextoSouEu ? false : true,
           'status': 'ativo',
+          ..._markMeta(isSelf: _isSelf(context), userId: provider.userId),
         });
 
-        try {
-          await notif.scheduleNotification(
-            id: idNotif,
-            title: 'Hora do medicamento',
-            body: body,
-            scheduledDateTime: ts,
-            idLembrete: doc.id,
-            idUsuario: idUsuario,
-          );
-        } catch (_) {}
+        await _safeScheduleNotif(
+          notif,
+          id: idNotif,
+          title: 'Hora do medicamento',
+          body: body,
+          when: ts,
+          idLembrete: doc.id,
+          idUsuario: idUsuario,
+        );
       }
       cursorDia = cursorDia.add(const Duration(days: 1));
     }
 
-    // refresh cache local
-    try {
-      final snapshot =
-          await _firestore
-              .collection('usuarios')
-              .doc(idUsuario)
-              .collection('lembretes')
-              .get();
-      provider.lembretes =
-          snapshot.docs.map((d) {
-            final m = d.data();
-            m['id'] = d.id;
-            return m;
-          }).toList();
-      provider.fetchData();
-    } catch (_) {}
+    provider.fetchData();
   }
 
-  /// Finaliza um tratamento:
-  /// - status := "finalizado"
-  /// - dataTermino := agora (ou valor informado)
-  /// - cancela todos os lembretes FUTUROS do tratamento e suas notificações
+  // --------------------------- Finalização de tratamento ---------------------------
+
   Future<void> finalizarTratamento({
     required BuildContext context,
     required String idUsuario,
     required String idTratamento,
-    DateTime? dataTermino, // opcional: sobrescreve a data de término
+    DateTime? dataTermino,
   }) async {
     final provider = Provider.of<UsuarioProvider>(context, listen: false);
     final notif = NotificationService();
     final agora = DateTime.now();
 
-    // 1) Confere se o tratamento existe no cache
+    final usuariosRef = _firestore.collection(_kColUsuarios).doc(idUsuario);
+    final tratRef = usuariosRef.collection(_kColTratamentos).doc(idTratamento);
+
     final Map<String, dynamic> tratamento =
         provider.tratamentosMap[idTratamento] ?? {};
-    if (tratamento.isEmpty) {
-      throw Exception('Tratamento não encontrado');
-    }
-
-    // 2) Atualiza o documento do tratamento: status + dataTermino
-    final usuariosRef = _firestore.collection('usuarios').doc(idUsuario);
-    final tratRef = usuariosRef.collection('tratamentos').doc(idTratamento);
+    if (tratamento.isEmpty) throw Exception('Tratamento não encontrado');
 
     await tratRef.update({
       'status': 'finalizado',
       'dataTermino': Timestamp.fromDate(dataTermino ?? agora),
     });
 
-    // 3) Busca lembretes FUTUROS (>= agora) vivos (não cancelados) e do tratamento
-    final futurosSnap =
-        await usuariosRef
-            .collection('lembretes')
-            .where('idTratamento', isEqualTo: idTratamento)
-            .where('cancelado', isEqualTo: false)
-            .where(
-              'dataHoraAgendado',
-              isGreaterThanOrEqualTo: Timestamp.fromDate(agora),
-            )
-            .get();
+    final lembretesCol = usuariosRef.collection(_kColLembretes);
 
-    // 4) Marca como cancelado em batch e coleta ids de notificação p/ cancelar
-    final batch = _firestore.batch();
-    final notifIdsToCancel = <int>[];
+    final passadosSnap = await lembretesCol
+        .where('idTratamento', isEqualTo: idTratamento)
+        .where('cancelado', isEqualTo: false)
+        .where('dataHoraAgendado', isLessThan: Timestamp.fromDate(agora))
+        .get();
 
-    for (final doc in futurosSnap.docs) {
-      final data = doc.data();
-      final int? idNotif = data['idNotificacao'] as int?;
-      if (idNotif != null) notifIdsToCancel.add(idNotif);
+    final futurosSnap = await lembretesCol
+        .where('idTratamento', isEqualTo: idTratamento)
+        .where('cancelado', isEqualTo: false)
+        .where('dataHoraAgendado', isGreaterThanOrEqualTo: Timestamp.fromDate(agora))
+        .get();
 
-      batch.update(doc.reference, {'cancelado': true});
+    final notifIds = <int>[
+      for (final d in passadosSnap.docs)
+        if ((d.data()['idNotificacao'] as int?) != null)
+          (d.data()['idNotificacao'] as int)
+    ];
+    for (final d in futurosSnap.docs) {
+      final id = d.data()['idNotificacao'] as int?;
+      if (id != null) notifIds.add(id);
     }
 
-    await batch.commit();
+    // marca passados como cancelado
+    await _commitInChunks<QueryDocumentSnapshot<Map<String, dynamic>>>(
+      passadosSnap.docs,
+      op: (batch, doc) => batch.update(doc.reference, {'cancelado': true}),
+    );
 
-    // 5) Cancela notificações agendadas (fora do batch)
-    for (final id in notifIdsToCancel) {
-      try {
-        await notif.cancelNotification(id);
-      } catch (_) {}
+    // remove futuros
+    await _commitInChunks<QueryDocumentSnapshot<Map<String, dynamic>>>(
+      futurosSnap.docs,
+      op: (batch, doc) => batch.delete(doc.reference),
+    );
+
+    // cancela notifs
+    for (final id in notifIds) {
+      await _safeCancelNotif(notif, id);
     }
 
-    // 6) Recarrega cache local (lembretes e tratamentos) e notifica UI
-    try {
-      final lembretesSnap = await usuariosRef.collection('lembretes').get();
-      provider.lembretes =
-          lembretesSnap.docs.map((d) {
-            final m = d.data();
-            m['id'] = d.id;
-            return m;
-          }).toList();
-
-      // Atualiza o mapa de tratamentos no provider (pequeno refresh)
-      final tratsSnap = await usuariosRef.collection('tratamentos').get();
-      provider.tratamentosMap = {
-        for (final d in tratsSnap.docs) d.id: d.data(),
-      };
-
-      provider.fetchData();
-    } catch (_) {}
-
-    // Pronto: tratamento finalizado e lembretes futuros cancelados.
+    provider.fetchData();
   }
 
-  // --- Helper: finaliza se não restarem lembretes vivos do tratamento ---
+  // --------------------------- Finalização condicional ---------------------------
   Future<void> _finalizarSeUltimo({
     required BuildContext context,
     required String idUsuario,
     required String idTratamento,
     DateTime? dataTerminoPreferida,
   }) async {
-    final usuariosRef = _firestore.collection('usuarios').doc(idUsuario);
+    final usuariosRef = _firestore.collection(_kColUsuarios).doc(idUsuario);
 
-    // existe algum lembrete VIVO (não tomado/adiado/cancelado) ainda?
-    final vivosSnap =
-        await usuariosRef
-            .collection('lembretes')
-            .where('idTratamento', isEqualTo: idTratamento)
-            .where('tomado', isEqualTo: false)
-            .where('adiado', isEqualTo: false)
-            .where('cancelado', isEqualTo: false)
-            .limit(1)
-            .get();
+    final vivosSnap = await usuariosRef
+        .collection(_kColLembretes)
+        .where('idTratamento', isEqualTo: idTratamento)
+        .where('tomado', isEqualTo: false)
+        .where('adiado', isEqualTo: false)
+        .where('cancelado', isEqualTo: false)
+        .limit(1)
+        .get();
 
     if (vivosSnap.docs.isEmpty) {
-      // Finaliza tratamento
-      await usuariosRef.collection('tratamentos').doc(idTratamento).update({
+      await usuariosRef.collection(_kColTratamentos).doc(idTratamento).update({
         'status': 'finalizado',
-        'dataTermino': Timestamp.fromDate(
-          dataTerminoPreferida ?? DateTime.now(),
-        ),
+        'dataTermino':
+        Timestamp.fromDate(dataTerminoPreferida ?? DateTime.now()),
       });
 
-      // opcional: refresh básico no provider
       try {
         final provider = Provider.of<UsuarioProvider>(context, listen: false);
-        final tratsSnap = await usuariosRef.collection('tratamentos').get();
+        final tratsSnap =
+        await usuariosRef.collection(_kColTratamentos).get();
         provider.tratamentosMap = {
           for (final d in tratsSnap.docs) d.id: d.data(),
         };
@@ -1275,4 +1165,118 @@ class LembreteService {
       } catch (_) {}
     }
   }
+
+  //Cria/ressincroniza as notificações locais ao realizar login.
+
+  Future<void> criarNotificacoesPosLogin({
+    required BuildContext context,
+    required String idUsuario,
+    Duration janela = const Duration(days: 30),
+    bool resetarAntes = true,
+  }) async {
+    final provider = Provider.of<UsuarioProvider>(context, listen: false);
+    if (!provider.isContextoSouEu) {
+      // Evita agendar no dispositivo do cuidador para contas de terceiros.
+      return;
+    }
+
+    final agora = DateTime.now();
+    final limite = agora.add(janela);
+    final notif = NotificationService();
+
+    // 1) Opcionalmente, limpa agendamentos antigos (se o service permitir).
+    if (resetarAntes) {
+      try {
+        // Se seu NotificationService tiver cancelAll(); se não, ignora sem erro.
+        await notif.cancelAll();
+      } catch (_) {}
+    }
+
+    // 2) Busca lembretes futuros "vivos" do usuário na janela definida
+    final lembretesRef = _firestore
+        .collection(_kColUsuarios)
+        .doc(idUsuario)
+        .collection(_kColLembretes);
+
+    final querySnap = await lembretesRef
+        .where('cancelado', isEqualTo: false)
+        .where('adiado', isEqualTo: false)
+        .where('tomado', isEqualTo: false)
+        .where('dataHoraAgendado', isGreaterThanOrEqualTo: Timestamp.fromDate(agora))
+        .where('dataHoraAgendado', isLessThan: Timestamp.fromDate(limite))
+        .get();
+
+    if (querySnap.docs.isEmpty) {
+      return;
+    }
+
+    // 3) Prepara batch para preencher idNotificacao ausente e padronizar metadados
+    final batch = _firestore.batch();
+    final toSchedule = <({
+    int idNotif,
+    String idLembrete,
+    String idTratamento,
+    DateTime when,
+    })>[];
+
+    for (final d in querySnap.docs) {
+      final data = d.data();
+      final ts = data['dataHoraAgendado'] as Timestamp?;
+      if (ts == null) continue; // dado inconsistente
+
+      final when = ts.toDate();
+      if (when.isBefore(agora)) continue; // por garantia
+
+      final idTratamento = (data['idTratamento'] ?? '').toString();
+      if (idTratamento.isEmpty) continue;
+
+      int? idNotif = data['idNotificacao'] as int?;
+      if (idNotif == null) {
+        idNotif = d.id.hashCode.abs();
+        batch.update(d.reference, {
+          'idNotificacao': idNotif,
+          ..._markMeta(isSelf: true, userId: provider.userId),
+        });
+      }
+
+      toSchedule.add((
+      idNotif: idNotif,
+      idLembrete: d.id,
+      idTratamento: idTratamento,
+      when: when,
+      ));
+    }
+
+    // 4) Aplica atualizações (se houver)
+    if (toSchedule.isEmpty) return;
+    await batch.commit();
+
+    // 5) Agenda localmente (com corpo bonito da notif por tratamento)
+    for (final item in toSchedule) {
+      final t = provider.tratamentosMap[item.idTratamento] ?? {};
+      final body = _notifBodyFromTratamento(t);
+
+      // Cancel-and-replace defensivo: evita duplicidade se já existia pendente
+      try {
+        await _safeCancelNotif(notif, item.idNotif);
+      } catch (_) {}
+
+      await _safeScheduleNotif(
+        notif,
+        id: item.idNotif,
+        title: 'Hora do medicamento',
+        body: body,
+        when: item.when,
+        idLembrete: item.idLembrete,
+        idUsuario: idUsuario,
+      );
+    }
+
+    // 6) Atualiza caches em memória (opcional)
+    try {
+      await provider.fetchData();
+    } catch (_) {}
+  }
+
+
 }

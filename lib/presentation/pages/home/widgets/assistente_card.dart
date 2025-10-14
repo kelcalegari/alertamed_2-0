@@ -62,14 +62,17 @@ class _CardAssistenteIAState extends State<CardAssistenteIA> {
         mensagens.add({'role': 'assistant', 'content': resposta});
         carregando = false;
       });
-    } catch (e) {
+    } catch (e, stack) {
       setState(() {
         mensagens.add({
           'role': 'assistant',
-          'content': 'Ocorreu um erro ao consultar a IA. Tente novamente mais tarde.'
+          'content': 'Ocorreu um erro ao consultar a IA. Tente novamente mais tarde'
         });
         carregando = false;
       });
+      // opcional: log mais detalhado
+      debugPrint('Erro: $e\nStacktrace: $stack');
+
     }
   }
 

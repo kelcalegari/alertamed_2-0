@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../../../../providers/user_data_provider.dart';
 import '../../../../routes/routes.dart';
 import '../../../../shared/modals/custom_popup.dart';
+import '../../../home/service/alterar_lembrete.dart';
 import '../../utils/auth_validator.dart';
 import '../login_texts.dart';
 import 'package:flutter/services.dart';
@@ -57,9 +58,12 @@ class LoginService {
       }
 
       if (context.mounted) {
-        //final email = emailController.text.trim();
-        //await EmailHistoryStore().setLast(email);
+
         await context.read<UsuarioProvider>().onLogin();
+        await LembreteService().criarNotificacoesPosLogin(
+          context: context,
+          idUsuario: FirebaseAuth.instance.currentUser!.uid,
+        );
         try {
            TextInput.finishAutofillContext(shouldSave: true);
         } catch (_) {
