@@ -58,6 +58,7 @@ class UsuarioProvider extends ChangeNotifier {
   bool isLoading = true;
   bool isLoadingContexto = false;
   StreamSubscription<User?>? _authSub;
+  Timer? _authNullDebounce;
 
   String get userId => FirebaseAuth.instance.currentUser?.uid ?? '';
 
@@ -66,15 +67,27 @@ class UsuarioProvider extends ChangeNotifier {
   UsuarioProvider() {
     _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
       if (user == null) {
-        clearState();
+        // Espera a hidratação do Firebase antes de limpar estado
+        _authNullDebounce?.cancel();
+        _authNullDebounce = Timer(const Duration(milliseconds: 900), () async {
+          final stillNull = FirebaseAuth.instance.currentUser == null;
+          if (stillNull) {
+            clearState();          // continua sem usuário -> limpa
+          } else {
+            await fetchData();     // já hidratou -> carrega dados
+          }
+        });
       } else {
-        fetchData();
+        // Usuário notificado pela stream: cancela debounce e carrega dados
+        _authNullDebounce?.cancel();
+        unawaited(fetchData());
       }
     });
   }
 
   @override
   void dispose() {
+    _authNullDebounce?.cancel();
     _authSub?.cancel();
     super.dispose();
   }

@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "111437961180",
+    "project_id": "alertamed-44af0",
+    "storage_bucket": "alertamed-44af0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:111437961180:android:b9455f69fe72de5af52119",
+        "android_client_info": {
+          "package_name": "com.kelvynn.alertamed.alertamed"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "111437961180-ru8rokikajkegnmr1g7brrf0ak7uarn3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.kelvynn.alertamed.alertamed",
+            "certificate_hash": "09a182f88f5b2b29ea35707714ae698fcff27b5b"
+          }
+        },
+        {
+          "client_id": "111437961180-2s16b0j4s777qkq57p016vd1iutrk5ml.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBWNL0a-Pk5AJT5363JXxdYUbpO_L03L9s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "111437961180-2s16b0j4s777qkq57p016vd1iutrk5ml.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -9,8 +9,6 @@ import 'package:smartmed/presentation/pages/onboarding/onboarding_page.dart';
 import 'package:smartmed/presentation/routes/routes.dart';
 import 'package:smartmed/providers/user_data_provider.dart';
 import 'package:workmanager/workmanager.dart';
-import 'core/background/bg_sync.dart';
-import 'core/background/carewatch_bg_sync.dart';
 import 'core/background/dispatcher.dart';
 import 'core/services/notification_service.dart';
 import 'firebase_options.dart';
@@ -42,10 +40,21 @@ Future<void> main() async {
   // Notificações locais
   await NotificationService().init();
 
-  // Workmanager (inicializa o dispatcher global)
+  // Workmanager (apenas inicializa o dispatcher global)
   await Workmanager().initialize(bgCallbackDispatcher);
 
-  runApp(const AlertaMedApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        // lazy: true evita criar antes da primeira leitura
+        ChangeNotifierProvider(
+          create: (_) => UsuarioProvider(),
+          lazy: true,
+        ),
+      ],
+      child: const AlertaMedApp(),
+    ),
+  );
 }
 
 class AlertaMedApp extends StatelessWidget {
@@ -71,11 +80,10 @@ class AlertaMedApp extends StatelessWidget {
   }
 }
 
-/// Decide a tela de acordo com o estado de autenticação em tempo real.
+/// Gate de autenticação:
 /// - Sem usuário -> Onboarding
-/// - Com usuário:
-///     - Se email verificado -> Home
-///     - Se não verificado -> VerifyEmail
+/// - Com usuário e email verificado -> Home (+ dispara onLogin do provider)
+/// - Com usuário e sem verificação -> VerificarEmail
 class SplashGate extends StatefulWidget {
   const SplashGate({super.key});
   @override
@@ -84,12 +92,13 @@ class SplashGate extends StatefulWidget {
 
 class _SplashGateState extends State<SplashGate> {
   bool _gaveAuthHydrationSomeTime = false;
+  bool _ranProviderLoginOnce = false; // evita chamadas repetidas
 
   @override
   void initState() {
     super.initState();
-    // Dá um pequeno tempo pro Firebase hidratar o currentUser do cache local
-    Future.delayed(const Duration(milliseconds: 500), () {
+    // Dá um respiro maior para o Firebase hidratar o currentUser do storage
+    Future.delayed(const Duration(milliseconds: 1200), () {
       if (mounted) setState(() => _gaveAuthHydrationSomeTime = true);
     });
   }
@@ -99,7 +108,6 @@ class _SplashGateState extends State<SplashGate> {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snap) {
-        // Enquanto a stream está conectando OU ainda não demos tempo para hidratar
         if (snap.connectionState == ConnectionState.waiting || !_gaveAuthHydrationSomeTime) {
           return const _Splash();
         }
@@ -108,74 +116,31 @@ class _SplashGateState extends State<SplashGate> {
         final user = snap.data ?? FirebaseAuth.instance.currentUser;
 
         if (user == null) {
-          // Nenhum usuário logado: mostra onboarding
+          _ranProviderLoginOnce = false; // reset
           return const OnboardingPage();
         }
 
-        // Não chame user.reload() no boot — verificação de e-mail é baseada no cache
         final verified = user.emailVerified;
         if (!verified) {
+          _ranProviderLoginOnce = false; // reset
           return const VerificarEmailPage();
         }
 
-        // Usuário autenticado e verificado:
-        // Cria o UsuarioProvider apenas aqui, após o login
-        return MultiProvider(
-          providers: [
-            ChangeNotifierProvider(
-              create: (_) => UsuarioProvider()..onLogin(),
-            ),
-          ],
-          child: const _HomeAndBootTasks(),
-        );
+        // Dispara onLogin do provider UMA vez (ele já registra BgSync/Carewatch e carrega dados)
+        if (!_ranProviderLoginOnce) {
+          _ranProviderLoginOnce = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            context.read<UsuarioProvider>().onLogin();
+          });
+        }
+
+        return const HomePage();
       },
     );
   }
 }
 
-/// Responsável por rodar tarefas pós-login (WorkManager, etc.)
-class _HomeAndBootTasks extends StatefulWidget {
-  const _HomeAndBootTasks();
-
-  @override
-  State<_HomeAndBootTasks> createState() => _HomeAndBootTasksState();
-}
-
-class _HomeAndBootTasksState extends State<_HomeAndBootTasks> {
-  @override
-  void initState() {
-    super.initState();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final uid = FirebaseAuth.instance.currentUser!.uid;
-
-      // Sempre registra a task do paciente
-      await BgSync.register(pacienteUid: uid);
-
-      // Se também for cuidador, registra task Carewatch
-      try {
-        final db = FirebaseFirestore.instance;
-        final vincs = await db
-            .collection('usuarios').doc(uid)
-            .collection('vinculos')
-            .where('meuPapel', isEqualTo: 'cuidador')
-            .where('status', isEqualTo: 'ativo')
-            .limit(1)
-            .get(const GetOptions(source: Source.server));
-        if (vincs.docs.isNotEmpty) {
-          await CarewatchSync.register(cuidadorUid: uid);
-        }
-      } catch (_) {
-        // Se falhar (offline, etc.), apenas ignora
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) => const HomePage();
-}
-
-/// Tela de splash simples enquanto inicializa o app
 class _Splash extends StatelessWidget {
   const _Splash();
 
