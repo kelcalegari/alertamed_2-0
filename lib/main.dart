@@ -42,19 +42,10 @@ Future<void> main() async {
   // Notificações locais
   await NotificationService().init();
 
-  // Workmanager (apenas inicializa o dispatcher global)
-  await Workmanager().initialize(
-    bgCallbackDispatcher
-  );
+  // Workmanager (inicializa o dispatcher global)
+  await Workmanager().initialize(bgCallbackDispatcher);
 
-  runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => UsuarioProvider()),
-      ],
-      child: const AlertaMedApp(),
-    ),
-  );
+  runApp(const AlertaMedApp());
 }
 
 class AlertaMedApp extends StatelessWidget {
@@ -74,7 +65,6 @@ class AlertaMedApp extends StatelessWidget {
       supportedLocales: const [Locale('pt', 'BR')],
       locale: const Locale('pt', 'BR'),
       theme: ThemeData(primarySwatch: Colors.blue),
-      // Em vez de initialRoute estático, usamos uma gate que escuta o auth.
       home: const SplashGate(),
       onGenerateRoute: Routes.generateRoute,
     );
@@ -98,7 +88,7 @@ class _SplashGateState extends State<SplashGate> {
   @override
   void initState() {
     super.initState();
-    // Dá um respiro de ~500ms para o Firebase hidratar o currentUser do storage
+    // Dá um pequeno tempo pro Firebase hidratar o currentUser do cache local
     Future.delayed(const Duration(milliseconds: 500), () {
       if (mounted) setState(() => _gaveAuthHydrationSomeTime = true);
     });
@@ -109,7 +99,7 @@ class _SplashGateState extends State<SplashGate> {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snap) {
-        // Enquanto a stream está conectando OU ainda não demos tempo para hidratar, mostra splash
+        // Enquanto a stream está conectando OU ainda não demos tempo para hidratar
         if (snap.connectionState == ConnectionState.waiting || !_gaveAuthHydrationSomeTime) {
           return const _Splash();
         }
@@ -118,42 +108,74 @@ class _SplashGateState extends State<SplashGate> {
         final user = snap.data ?? FirebaseAuth.instance.currentUser;
 
         if (user == null) {
+          // Nenhum usuário logado: mostra onboarding
           return const OnboardingPage();
         }
 
-        // NÃO chame user.reload() no boot — verificação de e-mail é baseada no cache.
+        // Não chame user.reload() no boot — verificação de e-mail é baseada no cache
         final verified = user.emailVerified;
         if (!verified) {
           return const VerificarEmailPage();
         }
 
-        // Pos-frame para registrar tasks; não depende de rede para decidir a navegação
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          final uid = user.uid;
-          await BgSync.register(pacienteUid: uid);
-          try {
-            final db = FirebaseFirestore.instance;
-            final vincs = await db
-                .collection('usuarios').doc(uid)
-                .collection('vinculos')
-                .where('meuPapel', isEqualTo: 'cuidador')
-                .where('status', isEqualTo: 'ativo')
-                .limit(1)
-                .get(const GetOptions(source: Source.server));
-            if (vincs.docs.isNotEmpty) {
-              await CarewatchSync.register(cuidadorUid: uid);
-            }
-          } catch (_) {/* ignore: offline etc. */}
-        });
-
-        return const HomePage();
+        // Usuário autenticado e verificado:
+        // Cria o UsuarioProvider apenas aqui, após o login
+        return MultiProvider(
+          providers: [
+            ChangeNotifierProvider(
+              create: (_) => UsuarioProvider()..onLogin(),
+            ),
+          ],
+          child: const _HomeAndBootTasks(),
+        );
       },
     );
   }
 }
 
+/// Responsável por rodar tarefas pós-login (WorkManager, etc.)
+class _HomeAndBootTasks extends StatefulWidget {
+  const _HomeAndBootTasks();
 
+  @override
+  State<_HomeAndBootTasks> createState() => _HomeAndBootTasksState();
+}
 
+class _HomeAndBootTasksState extends State<_HomeAndBootTasks> {
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+
+      // Sempre registra a task do paciente
+      await BgSync.register(pacienteUid: uid);
+
+      // Se também for cuidador, registra task Carewatch
+      try {
+        final db = FirebaseFirestore.instance;
+        final vincs = await db
+            .collection('usuarios').doc(uid)
+            .collection('vinculos')
+            .where('meuPapel', isEqualTo: 'cuidador')
+            .where('status', isEqualTo: 'ativo')
+            .limit(1)
+            .get(const GetOptions(source: Source.server));
+        if (vincs.docs.isNotEmpty) {
+          await CarewatchSync.register(cuidadorUid: uid);
+        }
+      } catch (_) {
+        // Se falhar (offline, etc.), apenas ignora
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => const HomePage();
+}
+
+/// Tela de splash simples enquanto inicializa o app
 class _Splash extends StatelessWidget {
   const _Splash();
 
