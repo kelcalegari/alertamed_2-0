@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../../../core/services/credential_store.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../providers/user_data_provider.dart';
 import '../../routes/routes.dart';
@@ -266,6 +267,7 @@ class _ConfiguracaoPageState extends State<ConfiguracaoPage>
                       icon: Icon(Icons.logout, color: AppColors.textVerde),
                       onPressed: () async {
                         await FirebaseAuth.instance.signOut();
+                        await CredentialStore().clear();
                         context.read<UsuarioProvider>().logout();
                         if (!mounted) return;
                         await NotificationService().cancelAll();

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
+import '../../../../../core/services/credential_store.dart';
 import '../../../../../providers/user_data_provider.dart';
 import '../../../../routes/routes.dart';
 import '../../../../shared/modals/custom_popup.dart';
@@ -52,7 +53,7 @@ class LoginService {
             'Enviamos um link de verificação para o seu e-mail. '
                 'Clique no link e depois toque em "Já verifiquei" na próxima tela.',
           );
-          Navigator.pushReplacementNamed(context, Routes.verifyEmail);
+          Navigator.pushReplacementNamed(context, Routes.verificarEmail);
         }
         return;
       }
@@ -63,6 +64,10 @@ class LoginService {
         await LembreteService().criarNotificacoesPosLogin(
           context: context,
           idUsuario: FirebaseAuth.instance.currentUser!.uid,
+        );
+        await CredentialStore().save(
+          email: emailController.text.trim(),
+          password: passwordController.text,
         );
         try {
            TextInput.finishAutofillContext(shouldSave: true);

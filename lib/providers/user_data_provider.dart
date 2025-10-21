@@ -9,6 +9,7 @@ import '../core/services/notification_service.dart';
 
 import 'package:workmanager/workmanager.dart';
 import '../core/background/carewatch_bg_sync.dart';
+import '../presentation/pages/home/service/alterar_lembrete.dart';
 /// Provider responsável por separar dados do usuário logado (self)
 /// e do usuário em contexto (paciente atual) + controle de permissões.
 ///
@@ -149,7 +150,7 @@ class UsuarioProvider extends ChangeNotifier {
         _loadEstoque(ctxRef),
         _loadInfoMedicaDireto(ctxRef),
         _loadPermissoesDoContexto(ctxRef),
-        _loadNomePublico(ctxUid),
+        _loadNomePublico(ctxUid), LembreteService.realertOverdue(userId)
       ]);
     } finally {
       isLoadingContexto = false;
@@ -159,9 +160,13 @@ class UsuarioProvider extends ChangeNotifier {
   Future<void> onLogin() async {
     // ... sua lógica
     if (isContextoSouEu && userId.isNotEmpty) {
-      await BgSync.register(pacienteUid: userId);
+      await BgSync.register(pacienteUid: userId,usuarioUid:userId );
       await _ensureCarewatchRegisteredIfNeeded();
     }
+    else
+      {
+        await BgSync.register(usuarioUid:userId );
+      }
 
     fetchData();
   }

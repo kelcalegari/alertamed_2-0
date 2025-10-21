@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 
+import '../../../../../core/services/credential_store.dart';
 import '../../../../../providers/user_data_provider.dart';
 import '../../../../routes/routes.dart';
 import '../../../../shared/modals/custom_popup.dart';
@@ -74,7 +75,11 @@ class RegisterService {
 
       // 5) NÃO libera a home ainda. Leva para a tela/portão de verificação.
       if (context.mounted) {
-        Navigator.pushReplacementNamed(context, Routes.verifyEmail);
+        await CredentialStore().save(
+          email: email.trim(),
+          password: senha,
+        );
+        Navigator.pushReplacementNamed(context, Routes.verificarEmail);
       }
     } on FirebaseAuthException catch (e) {
       String mensagemErro;

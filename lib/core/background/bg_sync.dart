@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:workmanager/workmanager.dart';
 
+import '../../presentation/pages/home/service/alterar_lembrete.dart';
 import '../services/notification_service.dart';
 import 'package:timezone/data/latest_all.dart' as tzData;
 import 'package:timezone/timezone.dart' as tz;
@@ -18,14 +19,30 @@ class BgSync {
   static final Map<String, Map<String, dynamic>> _tratamentosCache = {};
 
   /// Registra a task para o UID do paciente atual.
-  static Future<void> register({required String pacienteUid}) async {
+  static Future<void> register({
+    required String usuarioUid,
+    String? pacienteUid,
+  }) async {
+    // Define identificador único da task, levando em conta o paciente (se houver)
+    final taskId = pacienteUid != null
+        ? 'bg-$taskName-$usuarioUid-$pacienteUid'
+        : 'bg-$taskName-$usuarioUid';
+
+    // Dados repassados à task em background
+    final input = {
+      'usuarioUid': usuarioUid,
+      if (pacienteUid != null) 'pacienteUid': pacienteUid,
+    };
+
     await Workmanager().registerPeriodicTask(
-      'bg-$taskName-$pacienteUid', // id único por paciente
+      taskId,
       taskName,
-      frequency: const Duration(minutes: 15), // mínimo do Android
+      frequency: const Duration(minutes: 15), // mínimo permitido no Android
       existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
-      constraints: Constraints(networkType: NetworkType.connected),
-      inputData: {'pacienteUid': pacienteUid},
+      constraints: Constraints(
+        networkType: NetworkType.connected,
+      ),
+      inputData: input,
       backoffPolicy: BackoffPolicy.exponential,
     );
   }
@@ -53,16 +70,28 @@ class BgSync {
         await NotificationService().init();
       } catch (_) {}
 
+      final usuarioUid = input?['usuarioUid'] as String?;
       final pacienteUid = input?['pacienteUid'] as String?;
-      if (pacienteUid == null || pacienteUid.isEmpty) return false;
 
-      // Sincroniza lembretes (e tratamentos, se você usa pendingSync neles)
-      await _syncLembretes(pacienteUid);
-      await _syncColecao(pacienteUid, 'tratamentos'); // opcional
 
-      // limpa cache ao final
+
+
+      if (pacienteUid != null && pacienteUid.isNotEmpty) {
+        // === Caso 1: executando como cuidador (há pacienteUid)
+        await _syncLembretes(pacienteUid);
+        await _syncColecao(pacienteUid, 'tratamentos');
+      }
+      // UID do usuário é obrigatório
+      if (usuarioUid == null || usuarioUid.isEmpty) return false;
+
+
+      await LembreteService.realertOverdue(usuarioUid);
+
+      // Limpa cache ao final
       _tratamentosCache.clear();
       return true;
+
+
     } catch (_) {
       _tratamentosCache.clear();
       return false;
@@ -321,11 +350,12 @@ class BgSync {
       }) {
     return d.reference.update({
       'pendingSync': false,
-      'classSync': "bq_sync",
+      'classSync': "bq_sync", // mantém igual ao seu código
       'lastSyncedAt': FieldValue.serverTimestamp(),
       if (extra != null) ...extra,
     });
   }
+
+
+
 }
-
-

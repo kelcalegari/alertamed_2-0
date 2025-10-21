@@ -3,8 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:smartmed/presentation/pages/auth/verificarEmailPage/verificar_email_page.dart';
-import 'package:smartmed/presentation/pages/home/home_page.dart';
+import 'package:smartmed/presentation/pages/basePagina/splash_page.dart';
 import 'package:smartmed/presentation/pages/onboarding/onboarding_page.dart';
 import 'package:smartmed/presentation/routes/routes.dart';
 import 'package:smartmed/providers/user_data_provider.dart';
@@ -32,7 +31,7 @@ Future<void> main() async {
   // Firebase
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // Idioma dos e-mails do Firebase (não é crítico se falhar)
+  // Idioma dos e-mails do Firebase (ok se falhar)
   try {
     await FirebaseAuth.instance.setLanguageCode('pt_BR');
   } catch (_) {}
@@ -40,17 +39,13 @@ Future<void> main() async {
   // Notificações locais
   await NotificationService().init();
 
-  // Workmanager (apenas inicializa o dispatcher global)
+  // Workmanager (dispatcher global)
   await Workmanager().initialize(bgCallbackDispatcher);
 
   runApp(
     MultiProvider(
       providers: [
-        // lazy: true evita criar antes da primeira leitura
-        ChangeNotifierProvider(
-          create: (_) => UsuarioProvider(),
-          lazy: true,
-        ),
+        ChangeNotifierProvider(create: (_) => UsuarioProvider(), lazy: true),
       ],
       child: const AlertaMedApp(),
     ),
@@ -74,80 +69,11 @@ class AlertaMedApp extends StatelessWidget {
       supportedLocales: const [Locale('pt', 'BR')],
       locale: const Locale('pt', 'BR'),
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const SplashGate(),
+
+      // ✅ Use só a SplashPage; ela decide e navega.
+      home: const OnboardingPage(),
+
       onGenerateRoute: Routes.generateRoute,
-    );
-  }
-}
-
-/// Gate de autenticação:
-/// - Sem usuário -> Onboarding
-/// - Com usuário e email verificado -> Home (+ dispara onLogin do provider)
-/// - Com usuário e sem verificação -> VerificarEmail
-class SplashGate extends StatefulWidget {
-  const SplashGate({super.key});
-  @override
-  State<SplashGate> createState() => _SplashGateState();
-}
-
-class _SplashGateState extends State<SplashGate> {
-  bool _gaveAuthHydrationSomeTime = false;
-  bool _ranProviderLoginOnce = false; // evita chamadas repetidas
-
-  @override
-  void initState() {
-    super.initState();
-    // Dá um respiro maior para o Firebase hidratar o currentUser do storage
-    Future.delayed(const Duration(milliseconds: 1200), () {
-      if (mounted) setState(() => _gaveAuthHydrationSomeTime = true);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting || !_gaveAuthHydrationSomeTime) {
-          return const _Splash();
-        }
-
-        // Usa o usuário já hidratado do Firebase; não chame reload aqui
-        final user = snap.data ?? FirebaseAuth.instance.currentUser;
-
-        if (user == null) {
-          _ranProviderLoginOnce = false; // reset
-          return const OnboardingPage();
-        }
-
-        final verified = user.emailVerified;
-        if (!verified) {
-          _ranProviderLoginOnce = false; // reset
-          return const VerificarEmailPage();
-        }
-
-        // Dispara onLogin do provider UMA vez (ele já registra BgSync/Carewatch e carrega dados)
-        if (!_ranProviderLoginOnce) {
-          _ranProviderLoginOnce = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            context.read<UsuarioProvider>().onLogin();
-          });
-        }
-
-        return const HomePage();
-      },
-    );
-  }
-}
-
-class _Splash extends StatelessWidget {
-  const _Splash();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
     );
   }
 }

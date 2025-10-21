@@ -1279,4 +1279,189 @@ class LembreteService {
   }
 
 
+  static Future<void> realertOverdue(String pacienteUid) async {
+    // -------------------- Configs --------------------
+    const int kAtrasoMinutos = 15;
+    const int kAntiSpamMinutos = 15;
+    const int kOffsetQuandoExiste = 500000;
+    const int kOffsetQuandoNaoExiste = 990000;
+
+    // Campos
+    const String fCancelado = 'cancelado';
+    const String fAdiado = 'adiado';
+    const String fTomado = 'tomado';
+    const String fStatus = 'status';
+    const String fAdiadoPara = 'adiadoPara';
+    const String fAgendadoPara = 'dataHoraAgendado';
+    const String fIdNotificacao = 'idNotificacao';
+    const String fLastRealertedAt = 'lastRealertedAt';
+    const String fRealertCount = 'realertCount';
+    const String fIdTratamento = 'idTratamento';
+
+    int? _toIntOrNull(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is String) return int.tryParse(v);
+      return null;
+    }
+
+    String _notifBodyFromTratamento(Map<String, dynamic> t) {
+      final nome = (t['nomeMedicamento'] ?? '').toString();
+      final conc = (t['concentracaoMedicamento'] ?? '').toString();
+      final dose = (t['dosagem'] ?? '').toString();
+      final tm   = (t['tipoMedicamento'] ?? '').toString();
+      if (nome.isNotEmpty && conc.isNotEmpty && dose.isNotEmpty && tm.isNotEmpty) {
+        return '$nome $conc ($dose $tm)';
+      }
+      return 'Lembrete de medicamento';
+    }
+
+    String _montarCorpoFallback(Map<String, dynamic> m) {
+      final s = (m[fStatus] ?? '').toString().trim();
+      return s.isNotEmpty ? s : 'Lembrete de medicamento';
+    }
+
+    DateTime? _dataEfetiva(Map<String, dynamic> m) {
+      final Timestamp? adiadoTs = m[fAdiadoPara] as Timestamp?;
+      final Timestamp? agendadoTs = m[fAgendadoPara] as Timestamp?;
+      return (adiadoTs ?? agendadoTs)?.toDate();
+    }
+
+    bool _estaAtrasado(DateTime efetivo, DateTime cutoff) =>
+        !efetivo.isAfter(cutoff);
+
+    bool _passouAntiSpam(DateTime agora, Map<String, dynamic> m) {
+      final Timestamp? lastTs = m[fLastRealertedAt] as Timestamp?;
+      if (lastTs == null) return true;
+      return agora.difference(lastTs.toDate()).inMinutes >= kAntiSpamMinutos;
+    }
+
+    int _idNotifInstant(int? idOriginal, String docId) {
+      if (idOriginal != null) return idOriginal + kOffsetQuandoExiste;
+      return kOffsetQuandoNaoExiste + (docId.hashCode & 0x3FFFF);
+    }
+
+    // -------------------- Execução --------------------
+    final agora = DateTime.now();
+    final cutoff = agora.subtract(const Duration(minutes: kAtrasoMinutos));
+    final cutoffTs = Timestamp.fromDate(cutoff);
+
+    final db = FirebaseFirestore.instance;
+    final col = db.collection('usuarios').doc(pacienteUid).collection('lembretes');
+
+    // ⚠️ Requer índice composto: cancelado ASC, adiado ASC, tomado ASC, dataHoraAgendado ASC
+    QuerySnapshot<Map<String, dynamic>> snap;
+    try {
+      snap = await col
+          .where(fCancelado, isEqualTo: false)
+          .where(fAdiado,    isEqualTo: false)
+          .where(fTomado,    isEqualTo: false)
+          .where(fAgendadoPara, isLessThanOrEqualTo: cutoffTs)
+          .orderBy(fAgendadoPara)
+          .limit(50)
+          .get(const GetOptions(source: Source.server));
+    } on FirebaseException catch (e) {
+      if (e.code == 'failed-precondition') {
+        // Logar e criar índice via link do e.message (opcional).
+      }
+      snap = await col.where(FieldPath.documentId, isEqualTo: '__none__').get();
+    } catch (_) {
+      snap = await col.where(FieldPath.documentId, isEqualTo: '__none__').get();
+    }
+
+    if (snap.docs.isEmpty) return;
+
+    final notif = NotificationService();
+
+    // Cache de tratamentos por ID para reduzir leituras
+    final Map<String, Map<String, dynamic>> tratamentoCache = {};
+
+    // Para reduzir I/O de escrita, acumule refs para auditoria
+    final List<DocumentReference<Map<String, dynamic>>> toUpdate = [];
+    int enviados = 0;
+
+    for (final d in snap.docs) {
+      final m = d.data();
+
+      if (m[fCancelado] == true) continue;
+
+      final efetivo = _dataEfetiva(m);
+      if (efetivo == null) continue;
+      if (!_estaAtrasado(efetivo, cutoff)) continue;
+
+      if (!_passouAntiSpam(agora, m)) continue;
+
+      // ===== Body bonito a partir do TRATAMENTO =====
+      String body;
+      final String idTrat = (m[fIdTratamento] ?? '').toString();
+      if (idTrat.isNotEmpty) {
+        Map<String, dynamic>? t = tratamentoCache[idTrat];
+        if (t == null) {
+          try {
+            final tDoc = await db
+                .collection('usuarios')
+                .doc(pacienteUid)
+                .collection('tratamentos')
+                .doc(idTrat)
+                .get(const GetOptions(source: Source.server));
+            t = tDoc.data() ?? const {};
+          } catch (_) {
+            t = const {};
+          }
+          tratamentoCache[idTrat] = t!;
+        }
+        final b = _notifBodyFromTratamento(t);
+        body = b.isNotEmpty ? b : _montarCorpoFallback(m);
+      } else {
+        body = _montarCorpoFallback(m);
+      }
+
+      final int? idOriginal = _toIntOrNull(m[fIdNotificacao]);
+      final int idInstant = _idNotifInstant(idOriginal, d.id);
+
+      // 🔔 Título agora inclui o horário original
+      final String horarioFormatado =
+      DateFormat('dd/MM HH:mm').format(efetivo); // exemplo: 21/10 08:30
+      final String titulo =
+          'Medicamento não tomado ($horarioFormatado)'; // ex: "Medicamento não tomado (21/10 08:30)"
+
+      try {
+        await LembreteService()._safeScheduleNotif(
+          notif,
+          id: idInstant,
+          title: titulo,
+          body: body,
+          when: DateTime.now().add(const Duration(seconds: 1)),
+          idLembrete: d.id,
+          idUsuario: pacienteUid,
+        );
+        toUpdate.add(d.reference);
+      } catch (_) {
+        continue; // falhou notificação local; segue
+      }
+    }
+
+
+    // Auditoria em lotes (max 500)
+    for (var i = 0; i < toUpdate.length; i += 500) {
+      final slice = toUpdate.sublist(i, (i + 500).clamp(0, toUpdate.length));
+      final batch = db.batch();
+      for (final ref in slice) {
+        batch.update(ref, {
+          fLastRealertedAt: FieldValue.serverTimestamp(),
+          fRealertCount: FieldValue.increment(1),
+        });
+      }
+      try {
+        await batch.commit();
+      } catch (_) {
+        // best-effort
+      }
+    }
+
+
+  }
+
+
+
 }

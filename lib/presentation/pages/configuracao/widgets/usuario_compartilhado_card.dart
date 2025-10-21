@@ -92,7 +92,7 @@ class _NivelInfo extends StatelessWidget {
           Text(
             traduzNivel(nivel),
             style: const TextStyle(
-              color: Colors.white,
+              color: AppColors.textVerde,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -100,7 +100,7 @@ class _NivelInfo extends StatelessWidget {
           if (descricaoNivel(nivel).isNotEmpty)
             Text(
               descricaoNivel(nivel),
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
+              style: const TextStyle(color: AppColors.textVerde, fontSize: 12),
             ),
           const SizedBox(height: 8),
           Wrap(
@@ -110,14 +110,14 @@ class _NivelInfo extends StatelessWidget {
               return Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(.10),
+                  color: AppColors.cardBackgroundVerde,
                   borderRadius: BorderRadius.circular(999),
                   border: Border.all(color: Colors.white.withOpacity(.12)),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(_iconPerm(p), size: 16, color: Colors.white),
+                    Icon(_iconPerm(p), size: 16, color: AppColors.iconColor,),
                     const SizedBox(width: 6),
                     Text(
                       _labelPerm(p),

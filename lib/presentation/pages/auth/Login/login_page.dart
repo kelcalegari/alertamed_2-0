@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:smartmed/presentation/pages/auth/Login/service/login_google_service.dart';
 import '../../../routes/routes.dart';
 import '../../../shared/widgets/custom_text_field.dart';
 import '../../../themes/app_colors.dart';
@@ -16,18 +17,13 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final controller = LoginService();
 
-
   bool _isLoggingIn = false;
-
-
 
   @override
   void dispose() {
     controller.dispose();
     super.dispose();
   }
-
-
 
   @override
   Widget build(BuildContext context) {
@@ -91,7 +87,8 @@ class _LoginPageState extends State<LoginPage> {
                             textInputAction: TextInputAction.next,
                             autofillHints: const [
                               AutofillHints.email,
-                              AutofillHints.username, // alguns gerenciadores preferem "username"
+                              AutofillHints
+                                  .username, // alguns gerenciadores preferem "username"
                             ],
                           ),
 
@@ -103,18 +100,16 @@ class _LoginPageState extends State<LoginPage> {
                             isPassword: true,
                             validador: AuthValidator.validatePassword,
                             textInputAction: TextInputAction.done,
-                            autofillHints: const [
-                              AutofillHints.password,
-                            ],
-
+                            autofillHints: const [AutofillHints.password],
                           ),
                           const SizedBox(height: 8),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
                               TextButton(
-                                onPressed: () =>
-                                    controller.redefinirSenhaComEmailDoCampo(context),
+                                onPressed:
+                                    () => controller
+                                        .redefinirSenhaComEmailDoCampo(context),
                                 child: const Text(
                                   LoginTexts.forgotPassword,
                                   style: TextStyle(
@@ -141,56 +136,105 @@ class _LoginPageState extends State<LoginPage> {
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(30),
                           ),
-                          disabledBackgroundColor:
-                          AppColors.botoesVerdes.withOpacity(0.6),
-                          disabledForegroundColor:
-                          AppColors.textBranco.withOpacity(0.9),
+                          disabledBackgroundColor: AppColors.botoesVerdes
+                              .withOpacity(0.6),
+                          disabledForegroundColor: AppColors.textBranco
+                              .withOpacity(0.9),
                         ),
-                        onPressed: _isLoggingIn
-                            ? null
-                            : () async {
-                          if (controller.formKey.currentState!.validate()) {
-                            setState(() => _isLoggingIn = true);
+                        onPressed:
+                            _isLoggingIn
+                                ? null
+                                : () async {
+                                  if (controller.formKey.currentState!
+                                      .validate()) {
+                                    setState(() => _isLoggingIn = true);
 
-                            await controller.autenticarUsuario(context);
+                                    await controller.autenticarUsuario(context);
 
-                            if (mounted) setState(() => _isLoggingIn = false);
-                          }
-                        },
+                                    if (mounted)
+                                      setState(() => _isLoggingIn = false);
+                                  }
+                                },
                         child: AnimatedSwitcher(
                           duration: const Duration(milliseconds: 200),
-                          child: _isLoggingIn
-                              ? Row(
-                            key: const ValueKey('logging'),
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: const [
-                              SizedBox(
-                                height: 18,
-                                width: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2.5,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
+                          child:
+                              _isLoggingIn
+                                  ? Row(
+                                    key: const ValueKey('logging'),
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: const [
+                                      SizedBox(
+                                        height: 18,
+                                        width: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                Colors.white,
+                                              ),
+                                        ),
+                                      ),
+                                      SizedBox(width: 10),
+                                      Text(
+                                        'Entrando…',
+                                        style: TextStyle(
+                                          color: AppColors.textBranco,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                  : const Text(
+                                    LoginTexts.loginButton,
+                                    key: ValueKey('login'),
+                                    style: TextStyle(
+                                      color: AppColors.textBranco,
+                                    ),
                                   ),
-                                ),
-                              ),
-                              SizedBox(width: 10),
-                              Text(
-                                'Entrando…',
-                                style: TextStyle(color: AppColors.textBranco),
-                              ),
-                            ],
-                          )
-                              : const Text(
-                            LoginTexts.loginButton,
-                            key: ValueKey('login'),
-                            style: TextStyle(color: AppColors.textBranco),
-                          ),
                         ),
                       ),
                     ),
                   ),
+                  /*
+                  const SizedBox(height: 16),
 
+                  Row(
+                    children: const [
+                      Expanded(child: Divider()),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text('ou'),
+                      ),
+                      Expanded(child: Divider()),
+                    ],
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  SizedBox(
+                    height: 48,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                        side: const BorderSide(width: 1.2),
+                      ),
+                      onPressed: _isLoggingIn
+                          ? null
+                          : () async {
+                        setState(() => _isLoggingIn = true);
+                        try {
+                          await controller.signInWithGoogle(context);
+                        } finally {
+                          if (mounted) setState(() => _isLoggingIn = false);
+                        }
+                      },
+                      icon: Image.asset(
+                        'assets/google_logo.png', // coloque um logo 24x24 em assets
+                        width: 20, height: 20,
+                      ),
+                      label: const Text('Continuar com Google'),
+                    ),
+                  ),
+                  */
                   const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -200,8 +244,8 @@ class _LoginPageState extends State<LoginPage> {
                         style: TextStyle(color: AppColors.textVerde),
                       ),
                       TextButton(
-                        onPressed: () =>
-                            Navigator.pushNamed(context, Routes.register),
+                        onPressed:
+                            () => Navigator.pushNamed(context, Routes.register),
                         child: const Text(
                           LoginTexts.createAccount,
                           style: TextStyle(

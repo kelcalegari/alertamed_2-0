@@ -54,6 +54,8 @@ dependencies:
   file_saver: ^0.2.13
   flutter_file_dialog: ^3.0.2
   workmanager: ^0.9.0+3
+  google_sign_in: ^6.2.1
+  flutter_secure_storage: ^9.2.2
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -92,6 +94,7 @@ flutter:
     - assets/logo_alertamed.png
     - assets/logo_alertamed_verde_icone.png
     - .env
+    - assets/google_logo.png
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 
